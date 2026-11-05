@@ -1,0 +1,15 @@
+# Universal Website Replication Engine - backend dependencies
+# Pinned playwright to the version whose Chromium is already cached locally.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+playwright==1.63.0
+beautifulsoup4>=4.12
+lxml>=5.0
+httpx>=0.27
+pillow>=10.0
+pydantic>=2.6
+python-dotenv>=1.0
+websockets>=12.0
+numpy>=1.26
+aiofiles>=23.0
+python-multipart>=0.0.9

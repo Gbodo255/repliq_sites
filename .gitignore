@@ -1,0 +1,26 @@
+# Python
+backend/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Environment
+backend/.env
+
+# Node / frontend build
+frontend/node_modules/
+frontend/dist/
+.vite/
+
+# Generated projects + database (runtime artifacts)
+projects/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local tooling
+.claude/
