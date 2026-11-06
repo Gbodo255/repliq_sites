@@ -84,6 +84,8 @@ class Settings:
     headful: bool = field(default_factory=lambda: _bool("HEADFUL", False))
 
     app_password: str = field(default_factory=lambda: _get("APP_PASSWORD", ""))
+    # Small hosts (e.g. 512 MB free tiers): lighter Chromium, one page at a time.
+    low_memory: bool = field(default_factory=lambda: _bool("LOW_MEMORY", False))
     block_trackers: bool = field(default_factory=lambda: _bool("BLOCK_TRACKERS", True))
     cache_ttl_hours: int = field(default_factory=lambda: _int("ASSET_CACHE_TTL_HOURS", 168))
     block_private_hosts: bool = field(default_factory=lambda: _bool("BLOCK_PRIVATE_HOSTS", True))

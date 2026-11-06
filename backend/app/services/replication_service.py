@@ -56,7 +56,8 @@ def _resolve_options(req) -> ReplicationOptions:
     valid = {v.name for v in settings.viewports}
     vps = req.viewports or base["viewports"]
     vps = [v for v in vps if v in valid] or ["desktop", "mobile"]
-    cap = settings.max_pages if mode != "full" else max(settings.max_pages, base["max_pages"])
+    cap = (settings.max_pages if (mode != "full" or settings.low_memory)
+           else max(settings.max_pages, base["max_pages"]))
     outputs = getattr(req, "outputs", None)
     return ReplicationOptions(
         max_pages=min(req.max_pages or base["max_pages"], cap),

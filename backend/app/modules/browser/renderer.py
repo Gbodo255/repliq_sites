@@ -288,7 +288,10 @@ class Renderer:
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.launch(
             headless=not settings.headful,
-            args=["--disable-dev-shm-usage", "--no-sandbox"],
+            args=["--disable-dev-shm-usage", "--no-sandbox"] + (
+                ["--disable-gpu", "--no-zygote", "--renderer-process-limit=1",
+                 "--disable-extensions", "--disable-background-networking",
+                 "--js-flags=--max-old-space-size=192"] if settings.low_memory else []),
         )
         log.info("Chromium launched (headless=%s)", not settings.headful)
 
