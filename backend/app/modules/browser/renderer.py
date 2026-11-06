@@ -157,9 +157,10 @@ _PREPARE_JS = r"""
     if (img.currentSrc && (!src || src.startsWith('data:'))) img.setAttribute('src', img.currentSrc);
   }
   let n = 0;
+  const MAX_SNAPS = (window.__rxMaxSnaps || 24);
   for (const el of document.querySelectorAll('iframe, canvas')) {
     const r = el.getBoundingClientRect();
-    if (r.width < 8 || r.height < 8 || n >= 24) continue;
+    if (r.width < 8 || r.height < 8 || n >= MAX_SNAPS) continue;
     el.setAttribute('data-rx-snap', String(n));
     out.snaps.push({ id: String(n), w: Math.round(r.width), h: Math.round(r.height), tag: el.tagName.toLowerCase() });
     n++;
@@ -279,6 +280,9 @@ SIGNATURE_JS = "() => {" + _PATH_FN + r"""
 }"""
 
 
+_LOW_MEM_MAX_SHOT_H = 6000   # px; reference and generated shots use the same cap
+
+
 class Renderer:
     def __init__(self) -> None:
         self._pw = None
@@ -290,8 +294,11 @@ class Renderer:
             headless=not settings.headful,
             args=["--disable-dev-shm-usage", "--no-sandbox"] + (
                 ["--disable-gpu", "--no-zygote", "--renderer-process-limit=1",
-                 "--disable-extensions", "--disable-background-networking",
-                 "--js-flags=--max-old-space-size=192"] if settings.low_memory else []),
+                 "--disable-site-isolation-trials",
+                 "--disable-features=IsolateOrigins,site-per-process,Translate,MediaRouter,OptimizationHints",
+                 "--disable-extensions", "--disable-background-networking", "--disable-sync",
+                 "--disable-component-update", "--mute-audio",
+                 "--js-flags=--max-old-space-size=160"] if settings.low_memory else []),
         )
         log.info("Chromium launched (headless=%s)", not settings.headful)
 
@@ -322,6 +329,13 @@ class Renderer:
         )
         if block and settings.block_trackers:
             await context.route(_BLOCK_RE, lambda route: route.abort())
+        if settings.low_memory:
+            async def _no_media(route):
+                if route.request.resource_type == "media":
+                    await route.abort()
+                else:
+                    await route.continue_()
+            await context.route(re.compile(r"\.(mp4|webm|ogg|ogv|mov|m4v|mp3|wav|m3u8|mpd)(\?|$)", re.I), _no_media)
         return context
 
     def _vp(self, name: str) -> Viewport:
@@ -360,6 +374,8 @@ class Renderer:
             await self._settle(page)
             await self._fonts_ready(page)
 
+            if settings.low_memory:
+                await page.evaluate("() => { window.__rxMaxSnaps = 8; }")
             prep = await page.evaluate(_PREPARE_JS)
             collected = await page.evaluate(_COLLECT_JS)
             result.final_url = urldefrag(page.url)[0]
@@ -393,7 +409,7 @@ class Renderer:
                     await page.set_viewport_size({"width": vp.width, "height": vp.height})
                     await self._settle(page, scroll=True)
                     result.analysis.setdefault("vp_classes", {})[name] = await page.evaluate("() => [document.documentElement.className || '', document.body ? (document.body.className || '') : '']")
-                    result.screenshots[name] = await page.screenshot(full_page=True, type="png")
+                    result.screenshots[name] = await self._shot(page, vp)
                     result.signatures[name] = await page.evaluate(SIGNATURE_JS)
                     result.analysis.setdefault("vp_styles", {})[name] = await page.evaluate(
                         STYLE_DIFF_JS, result.analysis.get("base_styles") or {})
@@ -422,7 +438,7 @@ class Renderer:
             await self._fonts_ready(page)
             await self._freeze(page)
             await self._settle(page, scroll=True)
-            png = await page.screenshot(full_page=True, type="png")
+            png = await self._shot(page, vp)
             sig = await page.evaluate(SIGNATURE_JS)
             return png, sig
         except Exception as exc:
@@ -430,6 +446,15 @@ class Renderer:
             return None
         finally:
             await context.close()
+
+    async def _shot(self, page, vp: Viewport) -> bytes:
+        if not settings.low_memory:
+            return await page.screenshot(full_page=True, type="png")
+        height = await page.evaluate(
+            "() => Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)")
+        cap = max(vp.height, min(int(height or vp.height), _LOW_MEM_MAX_SHOT_H))
+        return await page.screenshot(full_page=True, type="png",
+                                     clip={"x": 0, "y": 0, "width": vp.width, "height": cap})
 
     async def _fonts_ready(self, page) -> None:
         try:

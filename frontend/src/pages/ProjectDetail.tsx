@@ -32,7 +32,17 @@ export default function ProjectDetail() {
 
   useEffect(() => {
     let alive = true;
-    const load = () => api.getProject(id).then((d) => alive && setDetail(d)).catch((e) => alive && setError(e.message));
+    const load = () =>
+      api.getProject(id)
+        .then((d) => { if (alive) { setDetail(d); setError(null); } })
+        .catch((e) => {
+          if (!alive) return;
+          const msg = (e as Error).message || "";
+          // The project vanished (e.g. the server restarted and its disk was reset):
+          // stop showing a frozen progress bar.
+          if (/not found|404/i.test(msg)) setDetail(null);
+          setError(msg);
+        });
     load();
     const t = setInterval(() => {
       if (alive) load();
@@ -53,8 +63,19 @@ export default function ProjectDetail() {
 
   if (error && !detail) {
     return (
-      <div className="text-center py-16">
-        <p className="text-destructive">{error}</p>
+      <div className="text-center py-16 max-w-xl mx-auto">
+        <p className="text-destructive font-medium">
+          {/not found|404/i.test(error)
+            ? "This project no longer exists on the server."
+            : error}
+        </p>
+        {/not found|404/i.test(error) && (
+          <p className="text-sm text-muted-foreground mt-2">
+            The server restarted while it was working (on free hosting this happens when it runs
+            out of memory or after inactivity), and its files were reset. Please launch the
+            replication again, ideally with fewer pages or the Single page mode.
+          </p>
+        )}
         <Link to="/" className="text-primary mt-4 inline-block">← Back to dashboard</Link>
       </div>
     );

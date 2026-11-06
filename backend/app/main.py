@@ -72,6 +72,17 @@ def create_app() -> FastAPI:
                 "docs": "/docs",
             })
 
+    try:
+        from app.services.project_store import store
+        for p in store.list(limit=500):
+            if p.get("status") in ("running", "queued"):
+                d = store.get(p["id"])
+                if d:
+                    d["status"] = "failed"
+                    d["error"] = "Interrupted: the server restarted during the replication. Please run it again."
+                    store.save(d)
+    except Exception:  # noqa: BLE001 - never block startup
+        pass
     log.info("App ready. Projects dir: %s", settings.projects_dir)
     return app
 

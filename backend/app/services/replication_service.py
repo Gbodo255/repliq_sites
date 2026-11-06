@@ -48,6 +48,7 @@ _MODE_DEFAULTS = {
     "single_page": dict(max_depth=0, max_pages=1, viewports=["desktop", "mobile"], fix_cycles=2),
 }
 _MAX_COMPARE_PAGES = 40
+_LOW_MEM_COMPARE_PAGES = 1
 
 
 def _resolve_options(req) -> ReplicationOptions:
@@ -231,6 +232,7 @@ class JobManager:
                 comparisons, avg_ssim, fixer = [], None, None
                 if options.run_quality_check and options.viewport_names:
                     if settings.low_memory:
+                        self._release_capture_memory(ok_pages)
                         await renderer.start()
                     comparisons, avg_ssim, fixer = await self._quality_loop(
                         renderer, site_dir, shots_dir, options, ok_pages, page_records, emit)
@@ -351,6 +353,11 @@ class JobManager:
         pairs = [(by_url[rec.url], rec) for rec in page_records
                  if rec.status == "built" and rec.url in by_url]
         compare_set = pairs[:_MAX_COMPARE_PAGES]
+        cycles = options.fix_cycles
+        if settings.low_memory:
+            # Small host: check the home page only, one correction cycle.
+            compare_set = pairs[:_LOW_MEM_COMPARE_PAGES]
+            cycles = min(cycles, 1)
         fixer = LayoutFixer(options.viewport_names)
         sem = asyncio.Semaphore(max(1, settings.page_concurrency))
 
@@ -383,10 +390,13 @@ class JobManager:
 
         comparisons: list = []
         avg_ssim = None
-        for cycle in range(options.fix_cycles + 1):
+        for cycle in range(cycles + 1):
             emit("compare", f"Visual comparison pass {cycle + 1}", 91)
-            results = await asyncio.gather(*(one(rp, rec, vp) for rp, rec in compare_set
-                                             for vp in options.viewport_names))
+            jobs = [(rp, rec, vp) for rp, rec in compare_set for vp in options.viewport_names]
+            if settings.low_memory:
+                results = [await one(*j) for j in jobs]      # one image in memory at a time
+            else:
+                results = await asyncio.gather(*(one(*j) for j in jobs))
             results = [r for r in results if r]
             comparisons = [r[0] for r in results]
             ssims = [c.ssim for c in comparisons]
@@ -394,7 +404,7 @@ class JobManager:
             total_issues = sum(len(c.issues) for c in comparisons)
             emit("compare", f"Pass {cycle + 1}: avg SSIM={avg_ssim}, {total_issues} issue(s)",
                  93 + cycle, data={"avg_ssim": avg_ssim, "issues": total_issues})
-            if cycle >= options.fix_cycles:
+            if cycle >= cycles:
                 break
             # Layout fixer: restore the original computed state where it diverges.
             added = 0
@@ -414,6 +424,20 @@ class JobManager:
             emit("fix", f"Layout auto-fix: {added} correction(s) on {len(touched)} page(s)",
                  data={"fixed": added, "pages": len(touched)})
         return comparisons, avg_ssim, fixer
+
+    @staticmethod
+    def _release_capture_memory(pages) -> None:
+        """Drop capture data no longer needed once pages are built (small hosts)."""
+        for i, rp in enumerate(pages):
+            rp.html = ""
+            rp.snapshots = {}
+            for k in ("base_styles", "vp_styles", "vp_classes"):
+                rp.analysis.pop(k, None)
+            if i >= _LOW_MEM_COMPARE_PAGES:
+                rp.screenshots = {}
+                rp.signatures = {}
+        import gc
+        gc.collect()
 
     @staticmethod
     def _quality_report(page_records, comparisons, fixer, purge, audit, assets_failed: int) -> dict:
