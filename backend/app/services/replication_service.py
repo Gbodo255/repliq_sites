@@ -168,6 +168,12 @@ class JobManager:
                     emit("crawl", f"{skipped} page(s) skipped (HTTP errors / rate limiting)", level="warn")
                 detail["pages_count"] = len(ok_pages)
                 store.save(detail)
+                if settings.low_memory:
+                    # Free Chromium's memory while assets are downloaded and
+                    # pages are built; it is relaunched for the quality loop.
+                    await renderer.close()
+                    import gc
+                    gc.collect()
 
                 # 2. Analyse.
                 emit("analyze", "Analysing structure, palette, components", 51)
@@ -224,6 +230,8 @@ class JobManager:
                 # 4. Quality loop (compare + layout fix).
                 comparisons, avg_ssim, fixer = [], None, None
                 if options.run_quality_check and options.viewport_names:
+                    if settings.low_memory:
+                        await renderer.start()
                     comparisons, avg_ssim, fixer = await self._quality_loop(
                         renderer, site_dir, shots_dir, options, ok_pages, page_records, emit)
                     detail["comparisons"] = [c.to_dict() for c in comparisons]

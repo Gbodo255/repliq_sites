@@ -17,6 +17,13 @@ _DIFF_THRESHOLD = 28          # per-channel abs diff considered "different"
 _MAX_DIM = 1600               # downscale cap for speed
 
 
+def _max_pixels() -> int:
+    # The SSIM maps need ~12 float64 arrays of the image size: keep that small
+    # on memory-constrained hosts.
+    from app.config import settings
+    return 600_000 if settings.low_memory else 2_400_000
+
+
 def _load_rgb(data: bytes) -> Image.Image:
     return Image.open(io.BytesIO(data)).convert("RGB")
 
@@ -28,9 +35,9 @@ def _align(a: Image.Image, b: Image.Image) -> tuple[np.ndarray, np.ndarray, int,
     h = min(ha, hb)
     a = a.crop((0, 0, w, h))
     b = b.crop((0, 0, w, h))
-    if h > _MAX_DIM:
-        scale = _MAX_DIM / h
-        new = (max(1, int(w * scale)), _MAX_DIM)
+    scale = min(1.0, _MAX_DIM / h if h > _MAX_DIM else 1.0, (_max_pixels() / float(w * h)) ** 0.5)
+    if scale < 1.0:
+        new = (max(1, int(w * scale)), max(1, int(h * scale)))
         a = a.resize(new)
         b = b.resize(new)
     return np.asarray(a), np.asarray(b), w, h
