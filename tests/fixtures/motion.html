@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion fixture</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: sans-serif; }
+  header { position: sticky; top: 0; height: 70px; background: #123; color: #fff;
+           transition: height .3s, background .3s; }
+  header.scrolled { height: 44px; background: #000; }
+  .spacer { height: 1200px; }
+  .reveal { opacity: 0; transform: translateY(48px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+  section { padding: 80px 24px; }
+  .swiper { overflow: hidden; width: 400px; }
+  .swiper-wrapper { display: flex; }
+  .swiper-slide { min-width: 400px; height: 160px; }
+  .s1 { background: #e55; } .s2 { background: #5e5; } .s3 { background: #55e; }
+</style>
+</head>
+<body>
+<header id="masthead">Site header</header>
+
+<section>
+  <h1 class="reveal">Hero title</h1>
+  <p class="reveal">Intro paragraph that fades up.</p>
+</section>
+
+<div class="spacer"></div>
+
+<section>
+  <div class="reveal">Card A</div>
+  <div class="reveal">Card B</div>
+  <div class="reveal">Card C</div>
+</section>
+
+<section>
+  <div class="swiper">
+    <div class="swiper-wrapper">
+      <div class="swiper-slide s1">Slide 1</div>
+      <div class="swiper-slide s2">Slide 2</div>
+      <div class="swiper-slide s3">Slide 3</div>
+    </div>
+    <button class="swiper-button-prev">prev</button>
+    <button class="swiper-button-next">next</button>
+    <div class="swiper-pagination"></div>
+  </div>
+</section>
+
+<div class="spacer"></div>
+
+<script>
+  addEventListener('scroll', function () {
+    document.getElementById('masthead').classList.toggle('scrolled', scrollY > 50);
+  });
+  var io = new IntersectionObserver(function (es) {
+    es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+</script>
+</body>
+</html>

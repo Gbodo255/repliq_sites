@@ -18,6 +18,11 @@ RESPONSIVE_CSS = (
     "   verbatim and drives the responsive layout. Only safe, non-destructive\n"
     "   fallbacks live here. */\n"
     "body.nav-open { overflow: hidden; }\n"
+    "/* Web-component popups (menus/dropdowns slotted into a shadow DOM) are\n"
+    "   hidden on the live site by component logic that the static copy loses\n"
+    "   when its JavaScript is stripped; the capture marked the ones that were\n"
+    "   collapsed so they stay collapsed here instead of rendering open. */\n"
+    "[data-rx-collapsed] { display: none !important; }\n"
 )
 
 VIEWPORT_META = '<meta name="viewport" content="width=device-width, initial-scale=1">'

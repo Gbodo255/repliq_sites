@@ -61,10 +61,21 @@ ANALYSER → EXPLORER → TÉLÉCHARGER → COMPRENDRE → RECONSTRUIRE → TEST
   icônes — avec déduplication par hash et inventaire JSON.
 - **Reconstruction** : HTML5 autonome, CSS d'origine conservé (fidélité
   maximale), chemins locaux relatifs, pages fonctionnant hors ligne.
+- **Animations fidèles** : les apparitions au défilement sont capturées *par
+  l'effet* (état initial → état révélé + transition réelle), indépendamment de
+  la bibliothèque d'origine (AOS, WOW, GSAP/ScrollTrigger, Framer, observateur
+  maison…) et rejouées nativement sur la copie ; les animations/keyframes CSS et
+  les transitions `:hover` sont conservées et se rejouent telles quelles.
+- **Comportement au défilement** : header collant/rétractable, nav « scrolled »,
+  bouton retour-haut — les classes que le JavaScript ajoute au scroll sont
+  capturées et rejouées (c'est le CSS d'origine qui style l'état).
 - **Expérience utilisateur** : menus mobiles, accordéons, onglets, modales,
-  carrousels, défilement fluide et animations au scroll réimplémentés en
-  JavaScript natif (`interactions.js`).
-- **Responsive** : les media queries du site sont conservées telles quelles.
+  **carrousels/sliders** (Swiper, Slick, Splide, Glide, Bootstrap, génériques —
+  flèches, puces, boucle et défilement automatique), défilement fluide et
+  formulaires, réimplémentés sans dépendance (`interactions.js`).
+- **Responsive** : les media queries du site sont conservées telles quelles, et
+  les classes posées par le JavaScript à chaque largeur d'écran sont rejouées.
+  `prefers-reduced-motion` est respecté (animations désactivées).
 - **Contrôle qualité automatique** : comparaison **SSIM** + différence pixel,
   images de diff, boucle *générer → comparer → corriger*.
 - **Interface web** moderne (React + TypeScript + Tailwind) avec progression en
@@ -267,8 +278,21 @@ valeurs par défaut sûres. Principales options :
   Performance** du navigateur (couvre lazy-loading, `srcset`, images de fond),
   complétées par une analyse statique du HTML et des fichiers CSS.
 - Le JavaScript du framework est **retiré par défaut** (pour un instantané
-  statique stable), et les interactions courantes sont réimplémentées par
-  `js/interactions.js`. Utilisez `--keep-js` pour conserver le JS d'origine.
+  statique stable), et les interactions **et animations** courantes sont
+  réimplémentées par `js/interactions.js`. Utilisez `--keep-js` pour conserver
+  le JS d'origine.
+- Les **animations au défilement** sont capturées par *effet*, et non par
+  bibliothèque : avant tout défilement, l'état au repos (opacité / transform /
+  visibilité) de chaque élément est mesuré ; après défilement complet (qui
+  déclenche la logique de révélation d'origine), on relève ceux qui sont
+  apparus. Chacun est marqué (`data-rx-reveal-i`) avec son état initial et sa
+  transition réelle, puis rejoué par `interactions.js` via `IntersectionObserver`
+  — quelle que soit la lib (AOS, WOW, GSAP, Framer, observateur maison…).
+- Les **carrousels/sliders** sont redonnés vivants par un moteur sans dépendance
+  (flèches, puces, boucle, défilement automatique, pause au survol).
+- Les écrans de contrôle qualité **figent** les deux côtés de façon déterministe
+  (`ReplicatorInteractions.freeze()` résout animations et carrousels), donc la
+  comparaison SSIM n'est pas faussée par les animations ajoutées.
 - Avant la sérialisation : règles CSS-in-JS injectées via `insertRule`,
   `adoptedStyleSheets` et Shadow DOM ouverts sont matérialisés ; l'état des
   formulaires et l'image réellement affichée par les `<img>` lazy sont figés ;

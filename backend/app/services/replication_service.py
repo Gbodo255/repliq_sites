@@ -498,8 +498,10 @@ class JobManager:
             "",
             "- Captured from the browser-rendered DOM, so JavaScript frameworks are "
             "reproduced from what they display.",
-            "- Common interactions (menus, accordions, tabs, scroll reveal, forms) are "
-            "re-implemented by `js/interactions.js`.",
+            "- Scroll-reveal animations captured from the live site (initial state + "
+            "real transition) and common interactions (menus, accordions, tabs, "
+            "carousels, sticky headers, forms) are re-implemented by "
+            "`js/interactions.js`; `prefers-reduced-motion` is respected.",
             "- Embedded third-party widgets (maps, videos, iframes, canvases) are "
             "reproduced as images.",
             "- See `data/quality-report.json` for the per-page fidelity score.",

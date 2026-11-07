@@ -165,6 +165,67 @@ _PREPARE_JS = r"""
     out.snaps.push({ id: String(n), w: Math.round(r.width), h: Math.round(r.height), tag: el.tagName.toLowerCase() });
     n++;
   }
+  // Web-component popups: a menu/dropdown slotted into a custom element's
+  // shadow DOM is hidden on the live page by the component's own CSS/JS. In the
+  // static copy that JS is stripped and the element is never upgraded, so the
+  // slotted content would render open. Mark the ones that are collapsed NOW
+  // (ground truth from the live page) so the copy keeps them hidden. Scoped to
+  // web-component content only, so standard responsive menus are untouched.
+  try {
+    const inCustom = (el) => {
+      for (let p = el; p; p = p.parentElement) {
+        const t = p.tagName || '';
+        if (t.indexOf('-') > 0 && t.indexOf('RX-') !== 0) return true;
+      }
+      return false;
+    };
+    const notVisible = (el) => {
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return cs.display === 'none' || cs.visibility === 'hidden'
+        || parseFloat(cs.opacity) < 0.05 || r.width < 2 || r.height < 2;
+    };
+    const marks = new Set();
+    const state = {};
+    for (const c of document.querySelectorAll('[aria-controls][aria-expanded]')) {
+      const exp = c.getAttribute('aria-expanded') === 'true';
+      for (const id of (c.getAttribute('aria-controls') || '').split(/\s+/)) {
+        if (!id) continue;
+        if (exp) state[id] = true; else if (!(id in state)) state[id] = false;
+      }
+    }
+    for (const id in state) {
+      if (state[id]) continue;
+      let e = null; try { e = document.getElementById(id); } catch (x) {}
+      if (e) marks.add(e);
+    }
+    for (const e of document.querySelectorAll('[slot]')) marks.add(e);
+    for (const el of marks) {
+      if (el.hasAttribute('data-rx-collapsed') || el.hasAttribute('data-rx-reveal-i')) continue;
+      if (inCustom(el) && notVisible(el)) el.setAttribute('data-rx-collapsed', '');
+    }
+    // Component content rendered INSIDE a shadow root is out of reach of a
+    // document stylesheet, so freeze the live hidden state of its menu-like
+    // elements as an inline !important style (serialised with the declarative
+    // shadow DOM). Scoped to menu/dropdown/option-ish names to avoid touching
+    // unrelated shadow internals.
+    const MENU = /(menu|dropdown|panel|popover|popup|flyout|submenu|listbox|option|disclosure|collapse|accordion|drawer)/i;
+    const roots = [];
+    const collect = (r) => { for (const el of r.querySelectorAll('*')) if (el.shadowRoot) roots.push(el.shadowRoot); };
+    collect(document);
+    for (let i = 0; i < roots.length; i++) collect(roots[i]);
+    for (const root of roots) {
+      for (const el of root.querySelectorAll('*')) {
+        try {
+          if (el.hasAttribute('data-rx-reveal-i') || el.style.display) continue;
+          const sig = (el.getAttribute('class') || '') + ' ' + (el.getAttribute('role') || '');
+          if (!MENU.test(sig)) continue;
+          if (el.getClientRects().length === 0 || getComputedStyle(el).display === 'none')
+            el.style.setProperty('display', 'none', 'important');
+        } catch (e) {}
+      }
+    }
+  } catch (e) {}
   document.documentElement.classList.remove('async-hide');
   return out;
 }
@@ -280,7 +341,167 @@ SIGNATURE_JS = "() => {" + _PATH_FN + r"""
 }"""
 
 
+# --- Motion capture (scroll-reveal animations) -------------------------------
+# Captured in two passes in the SAME page context (so live element references
+# survive on ``window.__rxM0`` between the two ``evaluate`` calls):
+#
+#   _MOTION_BEFORE_JS : before any scroll, remember every element that is in a
+#       "pre-animation" resting state (hidden-ish: opacity<0.95, a transform, or
+#       visibility:hidden) together with its transition properties.
+#   _MOTION_AFTER_JS  : after the full auto-scroll (which fires the site's own
+#       scroll-reveal logic, whatever the library), see which of those elements
+#       became visible. Those are genuine scroll reveals; tag each one with
+#       ``data-rx-reveal-i`` and return a compact table so interactions.js can
+#       replay the exact entrance (initial state -> revealed state + transition)
+#       on the offline copy. Detection is by *effect*, so it is library-agnostic
+#       (AOS, WOW, GSAP/ScrollTrigger, Framer whileInView, custom IO, ...).
+_MOTION_BEFORE_JS = r"""
+() => {
+  const body = document.body;
+  if (!body) { window.__rxM0 = []; return 0; }
+  const arr = [];
+  const els = body.querySelectorAll('*');
+  const cap = Math.min(els.length, 6000);
+  for (let i = 0; i < cap; i++) {
+    const el = els[i];
+    const tag = el.tagName.toLowerCase();
+    if (tag==='script'||tag==='style'||tag==='link'||tag==='meta'||tag==='noscript'||tag==='template'||tag==='br') continue;
+    if (tag !== 'svg' && el.closest('svg')) continue;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none') continue;
+    const op = parseFloat(cs.opacity);
+    const tf = cs.transform;
+    const vis = cs.visibility;
+    const hidden = (op < 0.95) || (tf && tf !== 'none') || vis === 'hidden';
+    if (!hidden) continue;
+    arr.push({ el: el, o0: op, t0: tf, v0: vis,
+               tp: cs.transitionProperty, td: cs.transitionDuration,
+               te: cs.transitionTimingFunction, tdl: cs.transitionDelay });
+    if (arr.length >= 1500) break;
+  }
+  window.__rxM0 = arr;
+  return arr.length;
+}
+"""
+
+_MOTION_AFTER_JS = r"""
+() => {
+  const arr = window.__rxM0 || [];
+  const table = [];
+  let i = 0;
+  for (const rec of arr) {
+    const el = rec.el;
+    if (!el || !el.isConnected) continue;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none') continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) continue;
+    const op1 = parseFloat(cs.opacity);
+    const tf1 = cs.transform;
+    const vis1 = cs.visibility;
+    const revealed =
+      (rec.o0 < 0.95 && op1 >= 0.95) ||
+      (rec.v0 === 'hidden' && vis1 !== 'hidden') ||
+      (rec.t0 && rec.t0 !== 'none' && tf1 !== rec.t0);
+    if (!revealed) continue;
+    // Build a clean single transition. Computed transition-* are comma-joined
+    // lists aligned by index; durations/delays are safe to split on commas, but
+    // a timing function can itself contain commas (cubic-bezier/steps), so only
+    // reuse it when it is a simple keyword.
+    let trans = '';
+    if (rec.tp && /opacity|transform|all/.test(rec.tp)) {
+      const durs = (rec.td || '').split(',').map(s => parseFloat(s)).filter(v => !isNaN(v));
+      const maxd = durs.length ? Math.max.apply(null, durs) : 0;
+      if (maxd > 0) {
+        let ease = 'cubic-bezier(.22,.61,.36,1)';
+        const te = (rec.te || '').trim();
+        if (te && te.indexOf(',') === -1 && te.indexOf('(') === -1) ease = te;
+        let delay = '0s';
+        const dl = (rec.tdl || '').trim();
+        if (dl && dl.indexOf(',') === -1) delay = dl;
+        const d = maxd + 's';
+        trans = 'opacity ' + d + ' ' + ease + ' ' + delay + ', transform ' + d + ' ' + ease + ' ' + delay;
+      }
+    }
+    if (!trans) trans = 'opacity .7s cubic-bezier(.22,.61,.36,1), transform .7s cubic-bezier(.22,.61,.36,1)';
+    const o0 = (rec.o0 < 0.95) ? +rec.o0.toFixed(3) : (rec.v0 === 'hidden' ? 0 : null);
+    const t0 = (rec.t0 && rec.t0 !== 'none') ? rec.t0 : null;
+    if (o0 === null && t0 === null) continue;
+    const o1 = (op1 < 0.999) ? +op1.toFixed(3) : null;
+    const t1 = (tf1 && tf1 !== 'none') ? tf1 : null;
+    el.setAttribute('data-rx-reveal-i', String(i));
+    table.push([o0, t0, o1, t1, trans]);
+    i++;
+    if (i >= 400) break;
+  }
+  try { delete window.__rxM0; } catch (e) { window.__rxM0 = null; }
+  return { table: table };
+}
+"""
+
+# Classes the original JavaScript toggles on scroll (sticky/shrinking headers,
+# "scrolled" nav, reveal-on-scroll back-to-top). Sampled at rest and scrolled,
+# returning the added classes so interactions.js can toggle them past a
+# threshold. Only *added* classes are reported, so the site's own CSS styles the
+# state; nothing is invented.
+_SCROLL_STATE_JS = "async () => {" + _PATH_FN + r"""
+  const read = () => {
+    const h = document.documentElement.className || '';
+    const b = body ? (body.className || '') : '';
+    const header = document.querySelector(
+      'header, [role="banner"], .header, .site-header, #header, .navbar, .nav-bar, nav.fixed, nav.sticky');
+    let hp = null, hc = '';
+    if (header && header !== body) { hp = pathOf(header); hc = header.className || ''; }
+    return { h, b, hp, hc };
+  };
+  const at = async (y, wait) => { window.scrollTo(0, y); await new Promise(r => setTimeout(r, wait)); return read(); };
+  const a = await at(0, 120);
+  const s = await at(Math.max(600, Math.round(window.innerHeight * 0.9)), 260);
+  await at(0, 80);
+  const added = (from, to) => {
+    const f = new Set((from || '').split(/\s+/).filter(Boolean));
+    return (to || '').split(/\s+/).filter(Boolean).filter(c => !f.has(c));
+  };
+  const rows = [];
+  const ah = added(a.h, s.h); if (ah.length) rows.push(['html', ah]);
+  const ab = added(a.b, s.b); if (ab.length) rows.push(['body', ab]);
+  if (a.hp && a.hp === s.hp) { const ac = added(a.hc, s.hc); if (ac.length) rows.push([a.hp, ac]); }
+  return { rows: rows, threshold: 60 };
+}"""
+
+
 _LOW_MEM_MAX_SHOT_H = 6000   # px; reference and generated shots use the same cap
+
+
+# Make web fonts faithful at capture time: a font declared with
+# ``font-display: optional`` (or ``fallback``) is dropped for the page's
+# lifetime if it is not ready within ~100 ms of first layout, which happens
+# routinely over the network - so the live capture keeps the system fallback
+# while the offline copy (fonts on disk) uses the real font, and they diverge.
+# Relax font-display, force every declared face to download, then reflow.
+_FONT_FIX_JS = r"""async () => {
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try { rules = sheet.cssRules; } catch (e) { continue; }   // cross-origin
+    if (!rules) continue;
+    for (const rule of rules) {
+      try {
+        if (rule.type === 5 /* CSSFontFaceRule */) {
+          const d = rule.style.getPropertyValue('font-display');
+          if (d === 'optional' || d === 'fallback' || d === '')
+            rule.style.setProperty('font-display', 'swap');
+        }
+      } catch (e) {}
+    }
+  }
+  try {
+    await Promise.all([...document.fonts].map(
+      f => f.status === 'loaded' ? 1 : f.load().catch(() => {})));
+  } catch (e) {}
+  // Force a style/layout recalc so the now-loaded fonts are applied.
+  document.documentElement.style.setProperty('--rx-reflow', String(Date.now()));
+  void document.documentElement.offsetHeight;
+}"""
 
 
 class Renderer:
@@ -371,8 +592,22 @@ class Renderer:
                 await page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
                 pass
-            await self._settle(page)
+            # Resting (pre-animation) state, read before any scroll so elements
+            # that animate into view are seen in their hidden starting state.
+            await self._settle(page, scroll=False)
             await self._fonts_ready(page)
+            try:
+                await page.evaluate(_MOTION_BEFORE_JS)
+            except Exception:
+                pass
+            # Scroll the full height: triggers lazy-load AND the site's own
+            # scroll-reveal logic. Then read which elements became visible.
+            await self._settle(page, scroll=True)
+            await self._fonts_ready(page)
+            try:
+                motion = await page.evaluate(_MOTION_AFTER_JS)
+            except Exception:
+                motion = {}
 
             if settings.low_memory:
                 await page.evaluate("() => { window.__rxMaxSnaps = 8; }")
@@ -389,8 +624,15 @@ class Renderer:
             # Serialise the fully rendered DOM (open shadow roots included).
             result.analysis["base_styles"] = await page.evaluate(STYLES_JS)
             result.analysis["base_classes"] = await page.evaluate("() => [document.documentElement.className || '', document.body ? (document.body.className || '') : '']")
+            result.analysis["reveal"] = (motion or {}).get("table") or []
             result.html = "<!DOCTYPE html>\n" + await page.evaluate(_SERIALIZE_JS)
             result.ok = True
+
+            # Classes the original JS toggles on scroll (sticky/shrinking header).
+            try:
+                result.analysis["scroll_state"] = await page.evaluate(_SCROLL_STATE_JS)
+            except Exception:
+                result.analysis["scroll_state"] = {}
 
             # Iframes/canvases (third-party embeds, maps, charts) cannot be
             # copied as code, so they are reproduced as pixel-exact images.
@@ -458,6 +700,13 @@ class Renderer:
 
     async def _fonts_ready(self, page) -> None:
         try:
+            # font-display:optional/fallback locks the system fallback when a web
+            # font loads a touch late - routine over the network. The captured
+            # screenshot would then show the fallback, misrepresenting the real
+            # design (and diverging from the offline copy, whose fonts load
+            # instantly from disk). Neutralise font-display, force every declared
+            # face to download, then reflow so the intended font is applied.
+            await page.evaluate(_FONT_FIX_JS)
             await page.evaluate(
                 "() => Promise.race([document.fonts ? document.fonts.ready.then(() => 1) : 1,"
                 " new Promise(r => setTimeout(r, 4000))])"
@@ -470,7 +719,11 @@ class Renderer:
             await page.evaluate(
                 "(css) => { const s = document.createElement('style'); s.setAttribute('data-rx-ignore','');"
                 " s.textContent = css; (document.head || document.documentElement).appendChild(s);"
-                " document.querySelectorAll('video').forEach(v => { try { v.pause(); v.currentTime = 0; } catch(e){} }); }",
+                " document.querySelectorAll('video').forEach(v => { try { v.pause(); v.currentTime = 0; } catch(e){} });"
+                # On the generated copy, force every captured animation/carousel to
+                # its resolved state so the quality screenshot is deterministic and
+                # matches the (also frozen) original. No-op on the live site.
+                " try { if (window.ReplicatorInteractions && window.ReplicatorInteractions.freeze) window.ReplicatorInteractions.freeze(); } catch(e){} }",
                 _FREEZE_CSS,
             )
         except Exception:

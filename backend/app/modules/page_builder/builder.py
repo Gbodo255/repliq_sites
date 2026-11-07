@@ -178,12 +178,17 @@ class SiteBuilder:
                     f"rx-snap://{rel}/{sid}", png, f"embed-{stem}-{sid}.png")
                 snap_lookup[sid] = rec_snap.local_path
 
+            body_attrs: dict[str, object] = {}
             bp = self._breakpoint_classes(p)
             if bp:
-                attr = json.dumps(bp, separators=(",", ":")).replace("&", "&amp;").replace("'", "&#39;")
-                p_html = re.sub(r"<body\b", f"<body data-rx-bp='{attr}'", p.html, count=1, flags=re.I)
-            else:
-                p_html = p.html
+                body_attrs["data-rx-bp"] = bp
+            reveal = p.analysis.get("reveal") or []
+            if reveal:
+                body_attrs["data-rx-reveal"] = reveal
+            scroll_state = p.analysis.get("scroll_state") or {}
+            if scroll_state.get("rows"):
+                body_attrs["data-rx-scroll"] = scroll_state
+            p_html = self._inject_body_attrs(p.html, body_attrs)
 
             html = localize_html(
                 p_html, p.final_url or p.url, page_dir,
@@ -231,6 +236,20 @@ class SiteBuilder:
         return render_css(rules, ranges).replace(
             "rx-fidelity: restores the original computed layout state",
             "rx-responsive: inline styles set by the original JavaScript per breakpoint")
+
+    @staticmethod
+    def _inject_body_attrs(html: str, attrs: dict) -> str:
+        """Add ``data-rx-*`` attributes (JSON values) to the first <body> tag."""
+        if not attrs:
+            return html
+        parts = []
+        for name, value in attrs.items():
+            attr = (json.dumps(value, separators=(",", ":"))
+                    .replace("&", "&amp;").replace("'", "&#39;").replace("<", "\\u003c"))
+            parts.append(f"{name}='{attr}'")
+        injected = "<body " + " ".join(parts)
+        # A function replacement avoids re.sub interpreting backslashes (<).
+        return re.sub(r"<body\b", lambda _m: injected, html, count=1, flags=re.I)
 
     def _breakpoint_classes(self, page: RenderedPage) -> list:
         """Classes that the original JavaScript toggles per breakpoint.
