@@ -20,6 +20,7 @@ import re
 from urllib.parse import urldefrag, urljoin
 
 from playwright.async_api import Browser, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.config import Viewport, settings
 from app.core.logging import get_logger
@@ -580,18 +581,31 @@ class Renderer:
 
         page.on("response", _on_response)
         try:
-            resp = await page.goto(url, wait_until="load", timeout=settings.nav_timeout_ms)
+            # Navigate on DOMContentLoaded, not "load": many real sites never
+            # fire "load" cleanly (hanging third-party resources, beacons, long
+            # polling), which would time out and fail the whole page even though
+            # the DOM is fully there. If even DCL times out, proceed with the
+            # partial DOM rather than failing hard.
+            resp = None
+            try:
+                resp = await page.goto(url, wait_until="domcontentloaded",
+                                       timeout=settings.nav_timeout_ms)
+            except PlaywrightTimeoutError:
+                pass
             result.status_code = resp.status if resp else 0
-            if result.status_code in (429, 503):
-                ra = (resp.headers.get("retry-after") or "") if resp else ""
+            if resp is not None and result.status_code in (429, 503):
+                ra = resp.headers.get("retry-after") or ""
                 result.retry_after = float(ra) if ra.strip().isdigit() else 0.0
                 result.ok = False
                 result.error = f"HTTP {result.status_code} (rate limited)"
                 return result
-            try:
-                await page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:
-                pass
+            # Best-effort: let late resources and the network settle, but never
+            # fail the capture if they do not (bounded, swallowed).
+            for _state, _t in (("load", 8000), ("networkidle", 6000)):
+                try:
+                    await page.wait_for_load_state(_state, timeout=_t)
+                except Exception:
+                    pass
             # Resting (pre-animation) state, read before any scroll so elements
             # that animate into view are seen in their hidden starting state.
             await self._settle(page, scroll=False)
