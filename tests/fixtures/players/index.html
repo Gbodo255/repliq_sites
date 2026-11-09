@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Players fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  #lot { width: 200px; height: 200px; }
+  .strip { width: 600px; overflow: hidden; white-space: nowrap; }
+  #track { display: flex; gap: 0; }
+  #track span { box-sizing: border-box; flex: 0 0 150px; height: 40px; background: #ddd; border-right: 1px solid #999; }
+  .spacer { height: 300px; }
+</style>
+</head>
+<body>
+  <div id="lot"></div>
+  <p>We build <span id="type"></span></p>
+  <p>Fast <span id="rot">websites</span></p>
+  <p><span id="count">0+</span> clients</p>
+  <div class="strip"><div id="track">
+    <span>A</span><span>B</span><span>C</span><span>D</span>
+    <span>A</span><span>B</span><span>C</span><span>D</span>
+  </div></div>
+  <div class="spacer"></div>
+<script src="lottie.min.js"></script>
+<script>
+  lottie.loadAnimation({ container: document.getElementById('lot'), renderer: 'svg',
+                         loop: true, autoplay: true, path: 'square.json' });
+  // Typewriter.
+  const words = ['apps', 'sites'];
+  let w = 0, n = 0, del = false;
+  const type = document.getElementById('type');
+  (function tick() {
+    const word = words[w];
+    if (!del) { n++; type.textContent = word.slice(0, n); if (n === word.length) { del = true; return setTimeout(tick, 200); } }
+    else { n--; type.textContent = word.slice(0, n); if (n === 0) { del = false; w = (w + 1) % words.length; } }
+    setTimeout(tick, 30);
+  })();
+  // Rotator.
+  const rot = document.getElementById('rot'), list = ['websites', 'shops', 'blogs'];
+  let r = 0;
+  setInterval(() => { r = (r + 1) % list.length; rot.textContent = list[r]; }, 400);
+  // Count-up.
+  const cnt = document.getElementById('count');
+  let c = 0;
+  const ci = setInterval(() => { c += 10; cnt.textContent = c + '+'; if (c >= 120) clearInterval(ci); }, 80);
+  // rAF marquee (no CSS / Web Animation).
+  const track = document.getElementById('track');
+  let x = 0, last = performance.now();
+  (function frame(now) {
+    x -= 60 * (now - last) / 1000; last = now;
+    if (x <= -600) x += 600;
+    track.style.transform = 'translateX(' + x + 'px)';
+    requestAnimationFrame(frame);
+  })(last);
+</script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scroll-linked fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  #hdr { position: fixed; top: 0; left: 0; right: 0; height: 50px; background: #eee; transition: none; }
+  section { height: 900px; position: relative; }
+  #para { position: absolute; top: 200px; left: 100px; width: 200px; height: 200px; background: #2337ff; }
+  #fade { position: absolute; top: 300px; left: 400px; width: 200px; height: 200px; background: #ffb000; }
+  #once { position: absolute; top: 400px; left: 100px; width: 200px; height: 100px; background: #0a0; opacity: 0; }
+  #once.in { opacity: 1; }
+  #pinwrap { height: 1800px; position: relative; }
+  #pin { width: 300px; height: 200px; background: #c00; }
+</style>
+</head>
+<body>
+  <div id="hdr">header</div>
+  <section><div id="para"></div></section>
+  <section><div id="fade"></div><div id="once"></div></section>
+  <div id="pinwrap"><div id="pin">pinned</div></div>
+  <section></section>
+  <section></section>
+<script>
+  const para = document.getElementById('para');
+  const fade = document.getElementById('fade');
+  const once = document.getElementById('once');
+  const hdr = document.getElementById('hdr');
+  const pin = document.getElementById('pin');
+  const wrap = document.getElementById('pinwrap');
+  let lastY = 0;
+  function onScroll() {
+    const y = window.scrollY;
+    // Parallax: continuous, reversible.
+    para.style.transform = 'translateY(' + (y * 0.3).toFixed(1) + 'px)';
+    // Fade + scale over the second section.
+    const p = Math.max(0, Math.min(1, (y - 300) / 900));
+    fade.style.opacity = String(1 - p * 0.8);
+    fade.style.transform = 'scale(' + (1 - p * 0.5).toFixed(3) + ')';
+    // One-shot reveal: not scroll-linked.
+    if (y > 600) once.classList.add('in');
+    // Direction-dependent header: not scroll-linked.
+    hdr.style.transform = (y > lastY && y > 100) ? 'translateY(-60px)' : 'none';
+    lastY = y;
+    // JS pinning (GSAP-like): fixed while the wrapper is passing.
+    const top = wrap.offsetTop;
+    if (y >= top && y < top + 1800 - 200) {
+      pin.style.position = 'fixed'; pin.style.top = '0px'; pin.style.transform = '';
+    } else {
+      pin.style.position = ''; pin.style.top = '';
+      pin.style.transform = y >= top + 1600 ? 'translateY(1600px)' : '';
+    }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+</script>
+</body>
+</html>

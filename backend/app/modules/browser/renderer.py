@@ -25,6 +25,8 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from app.config import Viewport, settings
 from app.core.logging import get_logger
 from app.models.domain import RenderedPage
+from app.modules.browser import motion as _motion
+from app.modules.browser import players as _players
 
 log = get_logger("renderer")
 
@@ -229,6 +231,40 @@ _PREPARE_JS = r"""
   } catch (e) {}
   document.documentElement.classList.remove('async-hide');
   return out;
+}
+"""
+
+# Reads a snapshotted canvas's pixels (see Renderer._canvas_pixels).
+_CANVAS_PIXELS_JS = r"""
+(sid) => {
+  const c = document.querySelector('[data-rx-snap="' + sid + '"]');
+  if (!c || c.tagName !== 'CANVAS' || !c.width || !c.height) return { mode: 'shot' };
+  let gl = null, ctx = null;
+  try { gl = c.getContext('webgl2') || c.getContext('webgl'); } catch (e) {}
+  if (!gl) { try { ctx = c.getContext('2d'); } catch (e) {} }
+  try {
+    const attrs = (gl || ctx) && (gl || ctx).getContextAttributes ? (gl || ctx).getContextAttributes() : null;
+    if (attrs && attrs.alpha === false) return { mode: 'shot' };     // opaque: screenshot is exact
+  } catch (e) {}
+  let url = '';
+  try { url = c.toDataURL('image/png'); } catch (e) { return { mode: 'shot' }; }   // tainted
+  let blank = true;
+  try {
+    const t = document.createElement('canvas');
+    t.width = 48; t.height = 48;
+    const tc = t.getContext('2d');
+    tc.drawImage(c, 0, 0, 48, 48);
+    const px = tc.getImageData(0, 0, 48, 48).data;
+    for (let i = 3; i < px.length; i += 4) if (px[i] > 8) { blank = false; break; }
+  } catch (e) { blank = false; }
+  if (blank) {
+    // A blank WebGL buffer (no preserveDrawingBuffer): an embedded 3D scene is
+    // better as a screenshot, a full-screen transparent effect is dropped.
+    const r = c.getBoundingClientRect();
+    const big = r.width * r.height > 0.5 * innerWidth * innerHeight;
+    return { mode: (gl && !big) ? 'shot' : 'drop' };
+  }
+  return { mode: 'data', url: url };
 }
 """
 
@@ -483,6 +519,11 @@ _MOTION_BEFORE_JS = r"""
     const vis = cs.visibility;
     const hidden = (op < 0.95) || (tf && tf !== 'none') || vis === 'hidden';
     if (!hidden) continue;
+    // A looping animation (spinner, marquee) is not an entrance: leave it to
+    // the Web Animations capture.
+    try {
+      if (el.getAnimations().some(an => { try { return an.effect.getTiming().iterations === Infinity; } catch (e) { return false; } })) continue;
+    } catch (e) {}
     arr.push({ el: el, o0: op, t0: tf, v0: vis,
                tp: cs.transitionProperty, td: cs.transitionDuration,
                te: cs.transitionTimingFunction, tdl: cs.transitionDelay });
@@ -751,6 +792,106 @@ _DESIGN_JS = r"""
 """
 
 
+_CURRENTCOLOR_PROPS = ("border-top-color", "border-right-color", "border-bottom-color",
+                       "border-left-color", "text-decoration-color", "outline-color")
+
+
+def _media_kind(resp) -> str:
+    try:
+        u = resp.url.split("?", 1)[0].lower()
+        ct = (resp.headers.get("content-type") or "").lower()
+    except Exception:  # noqa: BLE001
+        return ""
+    if u.endswith(".riv"):
+        return "rive"
+    if u.endswith(".lottie"):
+        return "dotlottie"
+    if u.endswith(".json") or "json" in ct:
+        return "json"
+    return ""
+
+
+def _lottie_size(obj) -> tuple[int, int] | None:
+    if isinstance(obj, dict) and isinstance(obj.get("layers"), list) and "fr" in obj and "op" in obj:
+        try:
+            return int(obj.get("w") or 0), int(obj.get("h") or 0)
+        except (TypeError, ValueError):
+            return 0, 0
+    return None
+
+
+async def _grab_media(resp, out: list[dict]) -> None:
+    """Keep Lottie animations (JSON / dotLottie) and Rive files from responses."""
+    import io
+    import json as _json
+    import zipfile
+    kind = _media_kind(resp)
+    try:
+        if resp.status != 200:
+            return
+        body = await resp.body()
+    except Exception:  # noqa: BLE001
+        return
+    if not body or len(body) > 6_000_000:
+        return
+    if kind == "rive":
+        if body[:4] == b"RIVE":
+            out.append({"kind": "rive", "url": resp.url, "data": body})
+        return
+    if kind == "dotlottie":
+        try:
+            with zipfile.ZipFile(io.BytesIO(body)) as z:
+                names = [n for n in z.namelist() if n.startswith("animations/") and n.endswith(".json")]
+                if not names:
+                    return
+                text = z.read(names[0]).decode("utf-8")
+        except Exception:  # noqa: BLE001
+            return
+    else:
+        if body.lstrip()[:1] != b"{":
+            return
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return
+    try:
+        size = _lottie_size(_json.loads(text))
+    except ValueError:
+        return
+    if size is None:
+        return
+    out.append({"kind": "lottie", "url": resp.url, "text": text, "w": size[0], "h": size[1]})
+
+
+async def _inline_lottie_images(page, text: str, base_url: str) -> bytes | None:
+    """Embed a Lottie's external image assets as data URIs (copy works offline)."""
+    import base64
+    import json as _json
+    try:
+        obj = _json.loads(text)
+    except ValueError:
+        return None
+    fetched = 0
+    for a in obj.get("assets") or []:
+        if not isinstance(a, dict) or a.get("e") == 1 or not a.get("p") or fetched >= 30:
+            continue
+        p = str(a["p"])
+        if p.startswith("data:"):
+            continue
+        try:
+            u = urljoin(base_url, str(a.get("u") or "") + p)
+            r = await page.context.request.get(u, timeout=8000)
+            if r.ok:
+                data = await r.body()
+                if len(data) <= 3_000_000:
+                    ct = (r.headers.get("content-type") or "image/png").split(";")[0]
+                    a["u"], a["p"], a["e"] = "", f"data:{ct};base64,{base64.b64encode(data).decode()}", 1
+                    fetched += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return _json.dumps(obj, separators=(",", ":")).encode("utf-8")
+
+
 class Renderer:
     def __init__(self) -> None:
         self._pw = None
@@ -817,8 +958,24 @@ class Renderer:
     async def capture_page(self, url: str, viewport_names: list[str]) -> RenderedPage:
         primary = self._vp(viewport_names[0] if viewport_names else "desktop")
         context = await self._new_context(primary)
+        # Record every Element.animate() call (Framer Motion & co.) before any
+        # page script runs, so finished animations can still be read back.
+        try:
+            await context.add_init_script(_motion.ANIM_HOOK_JS)
+            await context.add_init_script(_players.PLAYER_HOOK_JS)
+        except Exception:
+            pass
         page = await context.new_page()
         result = RenderedPage(url=url, final_url=url, title="", html="")
+        # Lottie JSON / dotLottie / Rive files seen on the network.
+        media_tasks: list = []
+        media_found: list[dict] = []
+
+        def _on_media(r):
+            if len(media_tasks) < 80 and _media_kind(r):
+                media_tasks.append(asyncio.ensure_future(_grab_media(r, media_found)))
+
+        page.on("response", _on_media)
 
         def _on_response(r):
             try:
@@ -867,12 +1024,44 @@ class Renderer:
                 pass
             # Scroll the full height: triggers lazy-load AND the site's own
             # scroll-reveal logic. Then read which elements became visible.
+            await self._set_phase(page, "scroll")
             await self._settle(page, scroll=True)
             await self._fonts_ready(page)
             try:
                 motion = await page.evaluate(_MOTION_AFTER_JS)
             except Exception:
                 motion = {}
+            await self._set_phase(page, "off")
+            # Scroll-linked animations (parallax, scrub, JS pinning): sampled
+            # top->bottom->top; ends back at the top for serialisation.
+            try:
+                scroll_anims = await page.evaluate(_motion.SCROLL_TRACK_JS, {
+                    "maxEls": 1500 if settings.low_memory else 4000,
+                    "maxSteps": 20 if settings.low_memory else 40,
+                    "maxOut": 250,
+                })
+            except Exception as exc:
+                log.debug("scroll tracks %s failed: %s", url, exc)
+                scroll_anims = None
+            # Phase 3: players (Lottie / Rive), text effects, JS marquees.
+            players_meta: dict = {}
+            try:
+                await self._capture_players(page, result, media_tasks, media_found, players_meta)
+            except Exception as exc:  # best effort
+                log.debug("players %s failed: %s", url, exc)
+            # Web Animations (JS-driven intros, in-view and looping animations)
+            # read back with their real keyframes; elements tagged data-rx-a.
+            try:
+                anims = await page.evaluate(_motion.ANIM_COLLECT_JS)
+            except Exception:
+                anims = []
+            # Tag hoverable elements now so the tags are in the serialised DOM;
+            # they are probed after serialisation.
+            try:
+                n_hover = await page.evaluate(
+                    _motion.HOVER_TAG_JS, 16 if settings.low_memory else 60)
+            except Exception:
+                n_hover = 0
 
             if settings.low_memory:
                 await page.evaluate("() => { window.__rxMaxSnaps = 8; }")
@@ -890,6 +1079,9 @@ class Renderer:
             result.analysis["base_styles"] = await page.evaluate(STYLES_JS)
             result.analysis["base_classes"] = await page.evaluate("() => [document.documentElement.className || '', document.body ? (document.body.className || '') : '']")
             result.analysis["reveal"] = (motion or {}).get("table") or []
+            result.analysis["anims"] = anims or []
+            result.analysis.update(players_meta)
+            result.analysis["scroll_anims"] = scroll_anims or {}
             result.html = "<!DOCTYPE html>\n" + await page.evaluate(_SERIALIZE_JS)
             result.ok = True
 
@@ -903,8 +1095,12 @@ class Renderer:
             # copied as code, so they are reproduced as pixel-exact images.
             for snap in prep.get("snaps", []):
                 try:
-                    loc = page.locator(f'[data-rx-snap="{snap["id"]}"]').first
-                    result.snapshots[snap["id"]] = await loc.screenshot(type="png", timeout=6000)
+                    png = await self._canvas_pixels(page, snap["id"]) if snap.get("tag") == "canvas" else None
+                    if png is None:
+                        loc = page.locator(f'[data-rx-snap="{snap["id"]}"]').first
+                        png = await loc.screenshot(type="png", timeout=6000)
+                    if png:
+                        result.snapshots[snap["id"]] = png
                 except Exception as exc:  # best effort
                     log.debug("snapshot %s#%s failed: %s", url, snap["id"], exc)
 
@@ -912,6 +1108,8 @@ class Renderer:
             await self._freeze(page)
             primary_vp = viewport_names[0] if viewport_names else "desktop"
             for name in viewport_names:
+                if name != primary_vp and n_hover and "hover" not in result.analysis:
+                    await self._hover_pass(page, url, result, primary_vp, n_hover)
                 vp = self._vp(name)
                 try:
                     await page.set_viewport_size({"width": vp.width, "height": vp.height})
@@ -939,6 +1137,8 @@ class Renderer:
                             result.analysis.setdefault("bp_dom", {})[name] = body_html
                 except Exception as exc:  # pragma: no cover - screenshot is best effort
                     log.warning("screenshot %s@%s failed: %s", url, name, exc)
+            if n_hover and "hover" not in result.analysis:
+                await self._hover_pass(page, url, result, primary_vp, n_hover)
         except Exception as exc:
             result.ok = False
             result.error = str(exc)
@@ -1037,6 +1237,162 @@ class Renderer:
             )
         except Exception:
             pass
+
+    @staticmethod
+    async def _canvas_pixels(page, sid: str) -> bytes | None:
+        """A canvas's own pixels, transparency kept.
+
+        An element screenshot of a transparent canvas (particles, noise, cursor
+        trails) bakes the page *behind* it into the image, which then ghosts
+        over the copy. Returns ``None`` to fall back to a screenshot (opaque or
+        tainted canvases, blank WebGL buffers of embedded scenes) and ``b""``
+        to drop a blank full-screen overlay.
+        """
+        res = await page.evaluate(_CANVAS_PIXELS_JS, sid)
+        if not res or res.get("mode") == "shot":
+            return None
+        if res.get("mode") == "drop":
+            return b""
+        data = res.get("url") or ""
+        if not data.startswith("data:image/png;base64,"):
+            return None
+        import base64
+        return base64.b64decode(data.split(",", 1)[1])
+
+    async def _capture_players(self, page, result, media_tasks, media_found, meta_out: dict) -> None:
+        """Lottie / Rive players, text effects and JS marquees (page at rest)."""
+        try:
+            meta_out["text_fx"] = await page.evaluate(_players.TEXT_COLLECT_JS) or []
+        except Exception:
+            meta_out["text_fx"] = []
+        try:
+            meta_out["marquee"] = await page.evaluate(
+                _players.MARQUEE_JS, {"maxEls": 1500 if settings.low_memory else 4000}) or []
+        except Exception:
+            meta_out["marquee"] = []
+        if media_tasks:
+            await asyncio.wait(media_tasks, timeout=8)
+        lotties = [m for m in media_found if m["kind"] == "lottie"]
+        rivs = [m for m in media_found if m["kind"] == "rive"]
+        found = await page.evaluate(_players.LOTTIE_COLLECT_JS) or []
+        meta = []
+        used: set[int] = set()
+        for f in found:
+            data = f.get("data")
+            src_url = ""
+            if not data:
+                pick = None
+                for k, m in enumerate(lotties):          # by URL first
+                    if k not in used and m["url"] and m["url"] in (f.get("src"), f.get("path")):
+                        pick = k
+                        break
+                if pick is None:                          # then by size, in order
+                    for k, m in enumerate(lotties):
+                        if k not in used and m["w"] == f.get("w") and m["h"] == f.get("h"):
+                            pick = k
+                            break
+                if pick is None:
+                    continue
+                used.add(pick)
+                data, src_url = lotties[pick]["text"], lotties[pick]["url"]
+            # Only replay what plays by itself (animating now, or declared
+            # autoplay); hover/scroll-driven ones keep their static frame.
+            if not (f.get("live") or f.get("autoplay")):
+                continue
+            payload = await _inline_lottie_images(page, data, src_url or result.final_url)
+            if not payload:
+                continue
+            result.media[f"lottie:{f['i']}"] = payload
+            loop = f.get("loop")
+            meta.append({"i": f["i"], "loop": True if loop is None else bool(loop)})
+        meta_out["lottie"] = meta
+        if rivs:
+            canvases = await page.evaluate(_players.RIVE_CANVAS_JS) or []
+            if len(canvases) == len(rivs):
+                pairs = list(zip(canvases, rivs))
+            elif len(rivs) == 1 and canvases:
+                pairs = [(max(canvases, key=lambda c: c["w"] * c["h"]), rivs[0])]
+            else:
+                pairs = []
+            rmeta = []
+            for c, rv in pairs:
+                result.media[f"rive:{c['i']}"] = rv["data"]
+                rmeta.append({"i": c["i"]})
+            meta_out["rive"] = rmeta
+
+    @staticmethod
+    async def _set_phase(page, phase: str) -> None:
+        try:
+            await page.evaluate("(p) => { window.__rxPhase = p; }", phase)
+        except Exception:
+            pass
+
+    async def _hover_pass(self, page, url, result, primary_vp, n_hover) -> None:
+        """Probe hover states at the primary width.
+
+        Runs right AFTER the primary viewport's screenshot / style capture so
+        the extra time it takes does not shift what those record (autoplaying
+        heroes drift with time), and before other breakpoints re-render the DOM.
+        """
+        try:
+            vp = self._vp(primary_vp)
+            await page.set_viewport_size({"width": vp.width, "height": vp.height})
+            result.analysis["hover"] = await self._probe_hover(page, n_hover)
+        except Exception as exc:  # best effort
+            result.analysis["hover"] = []
+            log.debug("hover probe %s failed: %s", url, exc)
+
+    async def _probe_hover(self, page, count: int) -> list[dict]:
+        """Hover each tagged element and diff the computed style it produces."""
+        out: list[dict] = []
+        await self._set_phase(page, "hover")
+        try:
+            for n in range(count):
+                aim = await page.evaluate(_motion.HOVER_AIM_JS, n)
+                if not aim:
+                    continue
+                await page.mouse.move(1, 1)
+                await page.evaluate(_motion.FINISH_JS)
+                before = await page.evaluate(_motion.HOVER_READ_JS, n)
+                if not before:
+                    continue
+                mark = await page.evaluate(_motion.HOVER_TIMING_START_JS)
+                await page.mouse.move(aim["x"], aim["y"])
+                await page.wait_for_timeout(60)
+                await page.evaluate(_motion.FINISH_JS)
+                await page.wait_for_timeout(30)
+                after = await page.evaluate(_motion.HOVER_READ_JS, n) or {}
+                timing = await page.evaluate(_motion.HOVER_TIMING_JS, [n, mark]) or {}
+                rows = []
+                for path, b in before.items():
+                    a = after.get(path)
+                    if not a:
+                        continue
+                    diff = {k: v for k, v in a.items()
+                            if not k.startswith("__") and v != b.get(k)}
+                    # Colours that merely follow currentColor come with `color`.
+                    for k in _CURRENTCOLOR_PROPS:
+                        if k in diff and b.get(k) == b.get("color") and a.get(k) == a.get("color"):
+                            del diff[k]
+                    if not diff:
+                        continue
+                    row = {"p": path, "s": diff}
+                    # A CSS transition already animates it; otherwise use the
+                    # runtime's own animation timing, when one ran.
+                    if path in timing and (b.get("__td") or "0s").strip() in ("0s", "0s, 0s"):
+                        row["tr"] = timing[path]
+                    rows.append(row)
+                if rows:
+                    out.append({"i": n, "r": rows[:40]})
+        finally:
+            try:
+                await page.mouse.move(1, 1)
+                await page.evaluate(_motion.FINISH_JS)
+                await page.evaluate("() => window.scrollTo(0, 0)")
+            except Exception:
+                pass
+            await self._set_phase(page, "off")
+        return out
 
     async def _settle(self, page, scroll: bool = True) -> None:
         if scroll:

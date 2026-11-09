@@ -51,6 +51,12 @@ INTERACTIONS_JS = r"""/*
     try { return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; }
   }
   var io = null;
+  var aio = null;            // in-view trigger for captured Web Animations
+  var scrubs = [];           // scroll-linked animations scrubbed by JS (no native timeline)
+  var scrubBound = false;
+  var loadedScripts = {};    // src -> true | false | [pending callbacks]
+  var players = [];          // live Lottie / Rive instances (paused by freeze())
+  var playersDone = false;
   var rxFrozen = false;       // set by freeze(): resolve every animation instantly
   var revealItems = [];       // scroll-reveal elements + their captured motion
   var carousels = [];         // live carousel controllers (for freeze())
@@ -282,8 +288,176 @@ INTERACTIONS_JS = r"""/*
   }
 
   // Resolve every animation/carousel to its final state (deterministic shots).
+  function loadScript(src, cb) {
+    if (!src) return cb(false);
+    if (loadedScripts[src] === true) return cb(true);
+    if (loadedScripts[src]) { loadedScripts[src].push(cb); return; }
+    loadedScripts[src] = [cb];
+    var s = document.createElement("script");
+    s.src = src;
+    s.onload = function () { var q = loadedScripts[src]; loadedScripts[src] = true; q.forEach(function (f) { f(true); }); };
+    s.onerror = function () { var q = loadedScripts[src]; loadedScripts[src] = false; q.forEach(function (f) { f(false); }); };
+    document.head.appendChild(s);
+  }
+
+  function findTagged(attr, id) {
+    var el = document.querySelector("[" + attr + "='" + id + "']");
+    if (el) return el;
+    // Web components (lottie-player & co.) keep the container in their shadow root.
+    var hosts = $("[data-rx-lottie-host]");
+    for (var h = 0; h < hosts.length; h++) {
+      var sr = hosts[h].shadowRoot;
+      var x = sr && sr.querySelector("[" + attr + "='" + id + "']");
+      if (x) return x;
+    }
+    return null;
+  }
+
+  function setupPlayers() {
+    if (rxFrozen || reduceMotion() || playersDone) return;
+    var spec;
+    try { spec = JSON.parse(document.body.getAttribute("data-rx-media") || "null"); } catch (e) { spec = null; }
+    if (!spec) return;
+    playersDone = true;
+    var lib = spec.lib || {};
+    var lot = spec.lottie || {}, riv = spec.rive || {};
+    Object.keys(lot).forEach(function (id) {
+      var m = lot[id], box = findTagged("data-rx-lottie", id);
+      if (!box) return;
+      loadScript(lib.lottie, function (ok) {
+        if (!ok || !window.lottie) return;
+        loadScript(m.src, function (ok2) {
+          var data = ok2 && window.__rxMedia && window.__rxMedia[m.k];
+          if (!data || rxFrozen) return;
+          var keep = box.innerHTML;
+          try {
+            box.innerHTML = "";
+            var anim = window.lottie.loadAnimation({ container: box, renderer: "svg", loop: m.loop !== false,
+              autoplay: true, animationData: data,
+              rendererSettings: { preserveAspectRatio: "xMidYMid meet" } });
+            players.push(anim);
+          } catch (e) { box.innerHTML = keep; }
+        });
+      });
+    });
+    var rivIds = Object.keys(riv);
+    if (!rivIds.length) return;
+    loadScript(lib.wasm, function (okW) {
+      loadScript(lib.rive, function (okR) {
+        if (!okW || !okR || !window.rive || !window.__rxRiveWasm) return;
+        try {
+          var bin = atob(window.__rxRiveWasm), arr = new Uint8Array(bin.length);
+          for (var b = 0; b < bin.length; b++) arr[b] = bin.charCodeAt(b);
+          window.rive.RuntimeLoader.setWasmUrl(URL.createObjectURL(new Blob([arr], { type: "application/wasm" })));
+        } catch (e) { return; }
+        rivIds.forEach(function (id) {
+          var m = riv[id], ph = document.querySelector("[data-rx-rive='" + id + "']");
+          if (!ph) return;
+          loadScript(m.src, function (ok2) {
+            var b64 = ok2 && window.__rxMedia && window.__rxMedia[m.k];
+            if (!b64 || rxFrozen) return;
+            var raw = atob(b64), buf = new Uint8Array(raw.length);
+            for (var k = 0; k < raw.length; k++) buf[k] = raw.charCodeAt(k);
+            var r = ph.getBoundingClientRect();
+            var cv = document.createElement("canvas");
+            cv.className = ph.className;
+            cv.setAttribute("style", ph.getAttribute("style") || "");
+            cv.width = Math.max(1, Math.round(r.width * (window.devicePixelRatio || 1)));
+            cv.height = Math.max(1, Math.round(r.height * (window.devicePixelRatio || 1)));
+            if (!cv.style.width) cv.style.width = r.width + "px";
+            if (!cv.style.height) cv.style.height = r.height + "px";
+            // In the page before the runtime starts (Rive pauses off-DOM
+            // canvases); the static frame shows behind it until it has drawn.
+            if (ph.src) cv.style.background = "url('" + ph.src.replace(/'/g, "%27") + "') center / 100% 100% no-repeat";
+            if (ph.parentNode) ph.parentNode.replaceChild(cv, ph);
+            try {
+              var inst = new window.rive.Rive({ buffer: buf.buffer, canvas: cv, autoplay: true,
+                onLoad: function () {
+                  try {
+                    var sm = inst.stateMachineNames || [];
+                    if (sm.length) inst.play(sm[0]);
+                    inst.resizeDrawingSurfaceToCanvas();
+                  } catch (e) {}
+                  setTimeout(function () { cv.style.background = ""; }, 120);
+                } });
+              players.push(inst);
+            } catch (e) {}
+          });
+        });
+      });
+    });
+  }
+
+  function fmtNum(v, f) {
+    var s = v.toFixed(f.dec || 0);
+    if (f.sep) { var p = s.split("."); p[0] = p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ","); s = p.join("."); }
+    return (f.pre || "") + s + (f.suf || "");
+  }
+
+  function setupTextFx() {
+    var list;
+    try { list = JSON.parse(document.body.getAttribute("data-rx-text") || "[]"); } catch (e) { list = []; }
+    if (!list.length) return;
+    list.forEach(function (fx) {
+      var el = document.querySelector("[data-rx-text='" + fx.i + "']");
+      if (!el || !once(el, "textfx")) return;
+      if (rxFrozen || reduceMotion()) return;          // keep the captured text
+      if (fx.k === "count") {
+        var run = function () {
+          var t0 = performance.now();
+          var step = function (now) {
+            if (rxFrozen) { el.textContent = fmtNum(fx.to, fx); return; }
+            var p = Math.min(1, (now - t0) / fx.d), e = 1 - Math.pow(1 - p, 3);
+            el.textContent = fmtNum(fx.from + (fx.to - fx.from) * e, fx);
+            if (p < 1) requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        };
+        if ("IntersectionObserver" in window) {
+          var cio = new IntersectionObserver(function (en) {
+            en.forEach(function (x) { if (x.isIntersecting) { cio.disconnect(); run(); } });
+          }, { threshold: 0.3 });
+          cio.observe(el);
+        } else run();
+      } else if (fx.k === "type" && fx.words && fx.words.length) {
+        var w = 0, n = el.textContent.length, del = false;
+        var tick = function () {
+          if (rxFrozen) { el.textContent = fx.words[0]; return; }
+          var word = fx.words[w];
+          if (!del) {
+            n = Math.min(n + 1, word.length);
+            el.textContent = word.slice(0, n);
+            if (n >= word.length) { del = fx.words.length > 1; return setTimeout(tick, fx.hold); }
+            return setTimeout(tick, fx.speed);
+          }
+          n = Math.max(0, n - 1);
+          el.textContent = word.slice(0, n);
+          if (n === 0) { del = false; w = (w + 1) % fx.words.length; }
+          setTimeout(tick, Math.max(20, fx.speed / 2));
+        };
+        n = 0; el.textContent = "";
+        setTimeout(tick, fx.speed);
+      } else if (fx.k === "rotate" && fx.words && fx.words.length > 1) {
+        var cur = Math.max(0, fx.words.indexOf((el.textContent || "").replace(/\s+/g, " ").trim()));
+        el.style.transition = "opacity .25s ease";
+        setInterval(function () {
+          if (rxFrozen) return;
+          el.style.opacity = "0";
+          setTimeout(function () {
+            cur = (cur + 1) % fx.words.length;
+            el.textContent = fx.words[cur];
+            el.style.opacity = "";
+          }, 250);
+        }, Math.max(600, fx.gap));
+      }
+    });
+  }
+
   function freeze() {
     rxFrozen = true;
+    players.forEach(function (p) { try { if (p.goToAndStop) p.pause(); else if (p.pause) p.pause(); } catch (e) {} });
+    document.documentElement.classList.add("rx-frozen");
+    $("[data-rx-a-view]").forEach(function (el) { el.classList.add("rx-a-run"); });
     revealAll();
     carousels.forEach(function (c) { try { c.stop(); c.go(0); } catch (e) {} });
   }
@@ -403,6 +577,62 @@ INTERACTIONS_JS = r"""/*
     } else {
       revealEls.forEach(function (el) { el.classList.add("in-view", "aos-animate", "is-visible"); });
     }
+
+    // 6b. Web Animations captured from the live site (CSS in <style id="rx-motion">):
+    //     in-view ones wait on their first frame until scrolled into view.
+    var aView = $("[data-rx-a-view]");
+    if (aView.length) {
+      document.documentElement.classList.add("rx-a-ready");
+      if ("IntersectionObserver" in window && !rxFrozen && !reduceMotion()) {
+        if (!aio) {
+          aio = new IntersectionObserver(function (entries) {
+            entries.forEach(function (en) {
+              if (en.isIntersecting) { en.target.classList.add("rx-a-run"); aio.unobserve(en.target); }
+            });
+          }, { threshold: 0.1 });
+        }
+        aView.forEach(function (el) { if (once(el, "anim")) aio.observe(el); });
+      } else {
+        aView.forEach(function (el) { el.classList.add("rx-a-run"); });
+      }
+    }
+
+    // 6c. Scroll-linked animations (CSS in <style id="rx-motion">). Native scroll
+    //     timelines drive them where supported; otherwise scrub the paused
+    //     animation with a negative delay from the captured scroll range.
+    var sEls = $("[data-rx-s][data-rx-s-r]");
+    var native = false;
+    try { native = !!(window.CSS && CSS.supports("animation-timeline: scroll()")); } catch (e) {}
+    if (sEls.length && !native) {
+      sEls.forEach(function (el) {
+        if (!once(el, "scrub")) return;
+        var r = (el.getAttribute("data-rx-s-r") || "").split(",");
+        var y0 = parseFloat(r[0]), y1 = parseFloat(r[1]);
+        if (isNaN(y0) || isNaN(y1) || y1 <= y0) return;
+        scrubs.push({ el: el, y0: y0, y1: y1 });
+      });
+      if (scrubs.length && !scrubBound) {
+        scrubBound = true;
+        var scrubRaf = 0;
+        var scrub = function () {
+          scrubRaf = 0;
+          var y = window.pageYOffset || document.documentElement.scrollTop || 0;
+          scrubs.forEach(function (s) {
+            var p = Math.max(0, Math.min(1, (y - s.y0) / (s.y1 - s.y0)));
+            s.el.style.animationDelay = (-p).toFixed(4) + "s";
+          });
+        };
+        window.addEventListener("scroll", function () { if (!scrubRaf) scrubRaf = requestAnimationFrame(scrub); }, { passive: true });
+        scrub();
+      }
+    }
+
+    // 6d. Animation players captured from the live site (Lottie / Rive): the
+    //     static frame stays until the player has loaded and replaced it.
+    setupPlayers();
+
+    // 6e. Text effects: typewriters, word rotators, number count-ups.
+    setupTextFx();
 
     // 7. Forms: no live backend - validate, then confirm locally.
     $("form").forEach(function (form) {

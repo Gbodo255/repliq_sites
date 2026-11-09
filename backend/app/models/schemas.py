@@ -42,6 +42,10 @@ class ReplicationRequest(BaseModel):
     keep_js: bool | None = Field(
         None, description="Keep the site's original JavaScript (default: strip framework runtime)"
     )
+    keep_anim_js: bool | None = Field(
+        None, description="Hybrid: keep the site's animation libraries and own scripts, "
+                          "drop framework runtimes and third-party scripts"
+    )
     run_quality_check: bool | None = None
     outputs: list[OutputTarget] | None = Field(
         None, description="Output formats to generate (default: static HTML)"

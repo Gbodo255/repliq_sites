@@ -146,6 +146,7 @@ export interface ReplicationRequest {
   viewports?: string[];
   fix_cycles?: number;
   keep_js?: boolean;
+  keep_anim_js?: boolean;
   run_quality_check?: boolean;
   outputs?: OutputTarget[];
   keep_external_links?: boolean;

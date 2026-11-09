@@ -16,11 +16,19 @@ class ReplicationOptions:
     fix_cycles: int = 1
     mode: str = "auto"              # auto | full | single_page
     keep_js: bool = False          # strip framework runtime JS by default
+    keep_anim_js: bool = False     # hybrid: keep animation libs + site scripts, drop frameworks
     download_media: bool = True    # download videos
     run_quality_check: bool = True
     outputs: list[str] = field(default_factory=lambda: ["static"])
     keep_external_links: bool = False   # default: zero external link in the copy
     import_wp_content: bool = True      # import posts/categories from a WordPress source
+
+    @property
+    def js_keep(self) -> bool | str:
+        """Script policy: True (keep all), "anim" (hybrid) or False (strip)."""
+        if self.keep_js:
+            return True
+        return "anim" if self.keep_anim_js else False
 
 
 @dataclass
@@ -74,6 +82,7 @@ class RenderedPage:
     screenshots: dict[str, bytes] = field(default_factory=dict)  # viewport -> png bytes
     signatures: dict[str, dict] = field(default_factory=dict)    # viewport -> layout signature
     snapshots: dict[str, bytes] = field(default_factory=dict)    # data-rx-snap id -> png
+    media: dict[str, bytes] = field(default_factory=dict)        # "lottie:i" / "rive:i" -> player payload
     analysis: dict = field(default_factory=dict)
 
 

@@ -32,6 +32,9 @@ from app.modules.crawler.crawler import canonicalize
 from app.modules.css_analyzer.css_tools import extract_css_urls  # noqa: F401 (re-export friendliness)
 from app.modules.dom_parser.rewriter import collect_asset_urls, localize_html
 from app.modules.interaction_analyzer.interactions import INTERACTIONS_JS
+from app.modules.interaction_analyzer.motion_css import motion_css
+from app.modules.interaction_analyzer.players import write_page_media, write_vendor
+from app.modules.dom_parser.script_policy import has_framework_runtime
 from app.modules.responsive_analyzer.responsive import (
     RESPONSIVE_CSS,
     VIEWPORT_META,
@@ -106,12 +109,12 @@ class SiteBuilder:
         for p in pages:
             base = p.final_url or p.url
             if p.html:
-                for u in collect_asset_urls(p.html, base, self.options.keep_js):
+                for u in collect_asset_urls(p.html, base, self.options.js_keep):
                     add(u)
             # Assets referenced only by a smaller-breakpoint DOM variant
             # (Framer re-renders per breakpoint) must be downloaded too.
             for vhtml in ((p.analysis or {}).get("bp_dom") or {}).values():
-                for u in collect_asset_urls(vhtml, base, self.options.keep_js):
+                for u in collect_asset_urls(vhtml, base, self.options.js_keep):
                     add(u)
             for u in p.stylesheet_urls:
                 add(u)
@@ -121,7 +124,7 @@ class SiteBuilder:
                 cat = categorize(ext)
                 if cat in _ASSET_CATEGORIES_FROM_RESOURCES:
                     add(u)
-                elif cat == "js" and self.options.keep_js:
+                elif cat == "js" and self.options.js_keep:
                     add(u)
         return urls
 
@@ -153,6 +156,7 @@ class SiteBuilder:
     # ------------------------------------------------------------- write pages
     def localize_and_write(self, pages: list[RenderedPage], store: AssetStore) -> list[PageRecord]:
         records: list[PageRecord] = []
+        self._vendor_libs: set[str] = getattr(self, "_vendor_libs", set())
         page_lookup = self._make_page_lookup()
         asset_lookup = self._make_asset_lookup(store)
         n = len([p for p in pages if p.html])
@@ -177,6 +181,13 @@ class SiteBuilder:
             resp_css = self._responsive_inline_css(p)
             if resp_css:
                 head_inject += f'<style id="rx-responsive">{resp_css}</style>'
+            # The site's own JavaScript drives the motion (keep_js, or the
+            # hybrid mode on a page with no framework runtime): no replays.
+            site_js = self.options.keep_js or (
+                self.options.keep_anim_js and not has_framework_runtime(p.html, p.final_url or p.url))
+            mo_css = "" if site_js else motion_css(p.analysis or {}, self._primary_range())
+            if mo_css:
+                head_inject += f'<style id="rx-motion">{mo_css}</style>'
             body_inject = f'<script src="{depth_prefix}js/interactions.js"></script>'
 
             snap_lookup: dict[str, str] = {}
@@ -191,11 +202,18 @@ class SiteBuilder:
             if bp:
                 body_attrs["data-rx-bp"] = bp
             reveal = p.analysis.get("reveal") or []
-            if reveal:
+            if reveal and not site_js:
                 body_attrs["data-rx-reveal"] = reveal
             scroll_state = p.analysis.get("scroll_state") or {}
-            if scroll_state.get("rows"):
+            if scroll_state.get("rows") and not site_js:
                 body_attrs["data-rx-scroll"] = scroll_state
+            text_fx = p.analysis.get("text_fx") or []
+            if text_fx and not site_js:
+                body_attrs["data-rx-text"] = text_fx
+            media_spec, libs = ({}, set()) if site_js else write_page_media(self.root, p, rel, depth_prefix)
+            if media_spec:
+                body_attrs["data-rx-media"] = media_spec
+                self._vendor_libs |= libs
             p_html = self._inject_body_attrs(p.html, body_attrs)
 
             # Per-breakpoint DOM variants (Framer & other runtimes re-render a
@@ -209,7 +227,7 @@ class SiteBuilder:
             html = localize_html(
                 p_html, p.final_url or p.url, page_dir,
                 asset_lookup, page_lookup,
-                keep_js=self.options.keep_js,
+                keep_js=self.options.js_keep,
                 inject_head=head_inject,
                 inject_body_end=body_inject,
                 snap_lookup=snap_lookup,
@@ -227,6 +245,13 @@ class SiteBuilder:
                       progress=min(80 + int(10 * i / max(1, n)), 90),
                       data={"path": rel})
         return records
+
+    def _primary_range(self):
+        """Width range of the primary (captured) breakpoint, or None if alone."""
+        names = list(self.options.viewport_names or [])
+        if len(names) < 2:
+            return None
+        return media_ranges(names).get(names[0])
 
     def _responsive_inline_css(self, page: RenderedPage) -> str:
         """Inline styles the original JavaScript set per breakpoint, as CSS."""
@@ -414,6 +439,7 @@ class SiteBuilder:
 
         (self.root / "css" / "responsive.css").write_text(RESPONSIVE_CSS, encoding="utf-8")
         (self.root / "js" / "interactions.js").write_text(INTERACTIONS_JS, encoding="utf-8")
+        write_vendor(self.root, getattr(self, "_vendor_libs", set()))
 
         (self.root / "data" / "assets-manifest.json").write_text(
             json.dumps(store.manifest(), indent=2, ensure_ascii=False), encoding="utf-8")

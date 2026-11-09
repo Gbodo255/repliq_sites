@@ -47,6 +47,7 @@ export default function NewReplication() {
   const [maxDepth, setMaxDepth] = useState(1);
   const [fixCycles, setFixCycles] = useState(2);
   const [keepJs, setKeepJs] = useState(false);
+  const [keepAnimJs, setKeepAnimJs] = useState(false);
   const [quality, setQuality] = useState(true);
   const [viewports, setViewports] = useState<string[]>(["desktop", "mobile"]);
   const [kind, setKind] = useState<Kind>("site");
@@ -79,6 +80,7 @@ export default function NewReplication() {
       payload.max_depth = maxDepth;
       payload.fix_cycles = fixCycles;
       payload.keep_js = keepJs;
+      payload.keep_anim_js = keepAnimJs && !keepJs;
       payload.run_quality_check = quality;
       payload.viewports = viewports;
     }
@@ -220,6 +222,16 @@ export default function NewReplication() {
                 <label className="flex items-start gap-2.5 text-[13.5px] text-ink">
                   <Checkbox className="mt-0.5" checked={keepJs} onChange={(e) => setKeepJs(e.target.checked)} />
                   Conserver le JavaScript d'origine (par défaut : retiré)
+                </label>
+                <label className="flex items-start gap-2.5 text-[13.5px] text-ink">
+                  <Checkbox className="mt-0.5" checked={keepAnimJs && !keepJs} disabled={keepJs}
+                    onChange={(e) => setKeepAnimJs(e.target.checked)} />
+                  <span>
+                    Mode hybride : garder uniquement le JavaScript d'animation
+                    <span className="block text-[12.5px] text-muted">
+                      GSAP, Lenis, Lottie, Swiper… et les scripts du site ; les frameworks et traceurs sont retirés.
+                    </span>
+                  </span>
                 </label>
                 <label className="flex items-start gap-2.5 text-[13.5px] text-ink">
                   <Checkbox className="mt-0.5" checked={keepExternal} onChange={(e) => setKeepExternal(e.target.checked)} />

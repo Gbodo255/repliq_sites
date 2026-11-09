@@ -17,6 +17,8 @@ from urllib.parse import urldefrag, urljoin
 
 from bs4 import BeautifulSoup
 
+from app.modules.dom_parser.script_policy import keep_anim_script
+
 from app.modules.css_analyzer.css_tools import extract_css_urls, rewrite_css_urls
 
 _PLACEHOLDER_RE = re.compile(r"^(data:image/(gif|svg|png);base64,|data:,)|^$", re.I)
@@ -46,7 +48,7 @@ def _iter_srcset(value: str):
         yield bits[0], (" " + " ".join(bits[1:]) if len(bits) > 1 else "")
 
 
-def collect_asset_urls(html: str, base_url: str, keep_js: bool = False) -> list[str]:
+def collect_asset_urls(html: str, base_url: str, keep_js: bool | str = False) -> list[str]:
     soup = BeautifulSoup(html, "lxml")
     found: list[str] = []
     seen: set[str] = set()
@@ -59,7 +61,7 @@ def collect_asset_urls(html: str, base_url: str, keep_js: bool = False) -> list[
     for link in soup.find_all("link", href=True):
         rels = {r.lower() for r in (link.get("rel") or [])}
         if rels & {"stylesheet", "icon", "shortcut", "apple-touch-icon", "mask-icon", "preload", "manifest"}:
-            if "preload" in rels and (link.get("as") or "").lower() == "script" and not keep_js:
+            if "preload" in rels and (link.get("as") or "").lower() == "script" and keep_js is not True:
                 continue
             add(_abs(base_url, link.get("href")))
 
@@ -80,7 +82,9 @@ def collect_asset_urls(html: str, base_url: str, keep_js: bool = False) -> list[
 
     if keep_js:
         for s in soup.find_all("script", src=True):
-            add(_abs(base_url, s.get("src")))
+            u = _abs(base_url, s.get("src"))
+            if keep_js is True or keep_anim_script(u, base_url, "", s.get("type") or ""):
+                add(u)
 
     # Inline style="" and <style> blocks.
     for el in soup.find_all(style=True):
@@ -100,7 +104,7 @@ def localize_html(
     page_dir: str,
     asset_lookup: Callable[[str], str | None],
     page_lookup: Callable[[str], str | None],
-    keep_js: bool = False,
+    keep_js: bool | str = False,  # True: keep all, "anim": hybrid (script_policy), False: strip
     inject_head: str = "",
     inject_body_end: str = "",
     snap_lookup: dict[str, str] | None = None,
@@ -167,6 +171,11 @@ def localize_html(
     # Scripts: strip framework runtime unless explicitly kept.
     for s in soup.find_all("script"):
         stype = (s.get("type") or "").lower()
+        if keep_js == "anim" and not keep_anim_script(
+                _abs(page_base_url, s.get("src")), page_base_url, s.string or "", stype):
+            if stype not in _KEEP_SCRIPT_TYPES:
+                s.decompose()
+            continue
         if keep_js:
             u = _abs(page_base_url, s.get("src"))
             local = rel_asset(u)
@@ -180,7 +189,7 @@ def localize_html(
     # Links.
     for link in soup.find_all("link", href=True):
         rels = {r.lower() for r in (link.get("rel") or [])}
-        if (link.get("as") or "").lower() == "script" and not keep_js:
+        if (link.get("as") or "").lower() == "script" and keep_js is not True:
             link.decompose()
             continue
         local = rel_asset(_abs(page_base_url, link.get("href")))

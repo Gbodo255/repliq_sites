@@ -67,6 +67,7 @@ def _resolve_options(req) -> ReplicationOptions:
         fix_cycles=req.fix_cycles if req.fix_cycles is not None else base["fix_cycles"],
         mode=mode,
         keep_js=bool(req.keep_js) if req.keep_js is not None else False,
+        keep_anim_js=bool(getattr(req, "keep_anim_js", False) or False),
         run_quality_check=req.run_quality_check if req.run_quality_check is not None else True,
         outputs=normalize_targets([o.value if hasattr(o, "value") else o for o in (outputs or [])]),
         keep_external_links=bool(getattr(req, "keep_external_links", False) or False),
@@ -469,6 +470,7 @@ class JobManager:
         for i, rp in enumerate(pages):
             rp.html = ""
             rp.snapshots = {}
+            rp.media = {}
             for k in ("base_styles", "vp_styles", "vp_classes"):
                 rp.analysis.pop(k, None)
             if i >= _LOW_MEM_COMPARE_PAGES:
@@ -540,6 +542,15 @@ class JobManager:
             "real transition) and common interactions (menus, accordions, tabs, "
             "carousels, sticky headers, forms) are re-implemented by "
             "`js/interactions.js`; `prefers-reduced-motion` is respected.",
+            "- JavaScript animations (Web Animations: load intros, in-view and "
+            "looping motion) are replayed as CSS `@keyframes` with their real timing, "
+            "and JS-driven hover states as `:hover` rules (`<style id=\"rx-motion\">`).",
+            "- Scroll-linked motion (parallax, scrubbed transforms/opacity, JS pinning) "
+            "is sampled along the page and replayed on a CSS scroll timeline, with a "
+            "JS fallback for browsers without `animation-timeline`.",
+            "- Lottie and Rive animations are replayed offline with vendored players "
+            "(`js/vendor/`), JS tickers as CSS loops, and typewriters / word rotators / "
+            "number count-ups by `js/interactions.js`.",
             "- Embedded third-party widgets (maps, videos, iframes, canvases) are "
             "reproduced as images.",
             "- See `data/quality-report.json` for the per-page fidelity score.",

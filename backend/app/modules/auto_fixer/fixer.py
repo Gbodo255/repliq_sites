@@ -90,7 +90,7 @@ async def relink_remaining_assets(
         if not path.exists():
             continue
         soup = BeautifulSoup(path.read_text(encoding="utf-8", errors="replace"), "lxml")
-        remotes = _collect_remote_refs(soup, options.keep_js)
+        remotes = _collect_remote_refs(soup, options.js_keep)
         if not remotes:
             continue
 
@@ -103,7 +103,7 @@ async def relink_remaining_assets(
         if not mapping:
             continue
 
-        changed = _apply_mapping(soup, mapping, options.keep_js)
+        changed = _apply_mapping(soup, mapping, options.js_keep)
         if changed:
             path.write_text(str(soup), encoding="utf-8")
             fixed_total += changed

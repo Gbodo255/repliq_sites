@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WAAPI fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .hero { height: 600px; display: flex; align-items: center; justify-content: center; }
+  #intro { font-size: 48px; }
+  #spinner { width: 40px; height: 40px; background: #2337ff; margin: 20px; }
+  #card { width: 240px; height: 120px; margin: 40px; background: rgb(240, 240, 240); cursor: pointer; }
+  #card .label { color: rgb(0, 0, 0); padding: 12px; }
+  .spacer { height: 1600px; }
+  #late { width: 200px; height: 80px; background: #ffb000; margin: 40px; }
+</style>
+</head>
+<body>
+  <section class="hero"><h1 id="intro">Hello motion</h1></section>
+  <div id="spinner"></div>
+  <div id="card"><div class="label">Hover me</div></div>
+  <div class="spacer"></div>
+  <div id="late">In view</div>
+<script>
+  // Intro animation on load (JS only, nothing in the stylesheet).
+  document.getElementById('intro').animate(
+    [{ opacity: 0, transform: 'translateY(40px)' }, { opacity: 1, transform: 'none' }],
+    { duration: 600, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' });
+  // Infinite loop.
+  document.getElementById('spinner').animate(
+    [{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }],
+    { duration: 1200, iterations: Infinity });
+  // JS-driven hover: inline styles + a Web Animation, no CSS :hover.
+  const card = document.getElementById('card');
+  const label = card.querySelector('.label');
+  card.addEventListener('mouseenter', () => {
+    card.animate([{ backgroundColor: 'rgb(240, 240, 240)' }, { backgroundColor: 'rgb(35, 55, 255)' }], { duration: 250 });
+    card.style.backgroundColor = 'rgb(35, 55, 255)';
+    label.style.color = 'rgb(255, 255, 255)';
+  });
+  card.addEventListener('mouseleave', () => {
+    card.style.backgroundColor = '';
+    label.style.color = '';
+  });
+  // Animation fired when the element scrolls into view.
+  const late = document.getElementById('late');
+  new IntersectionObserver((es, io) => es.forEach(e => {
+    if (!e.isIntersecting) return;
+    late.animate([{ transform: 'scale(0.5)' }, { transform: 'scale(1)' }], { duration: 500 });
+    io.disconnect();
+  })).observe(late);
+</script>
+</body>
+</html>

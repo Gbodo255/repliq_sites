@@ -137,7 +137,7 @@ class SiteModel:
     def default_head(self) -> list[HeadItem]:
         """Home head without page-specific layout fixes (for posts, archives...)."""
         return [h for h in self.home.head
-                if not (h.kind == "style" and h.attrs.get("id") in ("rx-fidelity", "rx-responsive"))]
+                if not (h.kind == "style" and h.attrs.get("id") in ("rx-fidelity", "rx-responsive", "rx-motion"))]
 
     @property
     def home(self) -> PageModel:
