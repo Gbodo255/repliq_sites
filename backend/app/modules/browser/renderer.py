@@ -248,6 +248,114 @@ _SERIALIZE_JS = r"""
 }
 """
 
+# Serialises just the <body> (open shadow roots included). Used to capture a
+# breakpoint-specific DOM variant for frameworks (Framer, and any JS runtime)
+# that *re-render* a different DOM per breakpoint instead of reflowing one DOM
+# with CSS media queries. The serialised <body> of the smaller breakpoints is
+# injected into the offline copy and shown/hidden by width, so the copy matches
+# the live site at every viewport (not just the one captured at primary width).
+_SERIALIZE_BODY_JS = r"""
+() => {
+  const b = document.body;
+  if (!b) return "";
+  const roots = [];
+  for (const el of b.querySelectorAll('*')) { if (el.shadowRoot) roots.push(el.shadowRoot); }
+  if (roots.length && b.getHTML) {
+    try {
+      const attrs = [...b.attributes].map(a => ' ' + a.name + '="' + a.value.replace(/&/g, '&amp;').replace(/"/g, '&quot;') + '"').join('');
+      return '<body' + attrs + '>' + b.getHTML({ serializableShadowRoots: true, shadowRoots: roots }) + '</body>';
+    } catch (e) {}
+  }
+  return b.outerHTML;
+}
+"""
+
+# Light prepare run before a variant <body> serialisation: pin the image the
+# current breakpoint actually displays and reflect form state, mirroring the
+# relevant parts of _PREPARE_JS (which ran once at primary width).
+_PREPARE_VARIANT_JS = r"""
+() => {
+  for (const img of document.querySelectorAll('img')) {
+    const src = img.getAttribute('src') || '';
+    if (img.currentSrc && (!src || src.startsWith('data:'))) img.setAttribute('src', img.currentSrc);
+  }
+  for (const el of document.querySelectorAll('input, textarea, select')) {
+    try {
+      if (el.tagName === 'INPUT') {
+        const t = (el.type || '').toLowerCase();
+        if (t === 'checkbox' || t === 'radio') { el.checked ? el.setAttribute('checked', '') : el.removeAttribute('checked'); }
+        else if (t !== 'password' && t !== 'file' && el.value) el.setAttribute('value', el.value);
+      } else if (el.tagName === 'TEXTAREA') { el.textContent = el.value; }
+    } catch (e) {}
+  }
+}
+"""
+
+# Bake the live layout of a breakpoint variant before serialising it.
+#
+# Frameworks like Framer keep several breakpoint layouts in one DOM and let their
+# RUNTIME pick/scale the one that fits: a component authored at a fixed desktop
+# width (e.g. 2888px) is fitted into a phone viewport with a runtime
+# ``transform: scale(...)`` on a wrapper whose box is sized to the *scaled*
+# result. None of that is in the serialised HTML, so once the runtime is stripped
+# the wide layout renders at full width and ``aspect-ratio`` boxes explode the
+# page height. The live computed layout is the ground truth, so pin the used
+# width/height and any transform for the elements that carry runtime layout, as
+# inline styles the static copy keeps. Scoped to boxes that actually diverge
+# (transformed, or wider than the viewport, or holding such a child) to bound the
+# HTML growth; text-level spans and svg internals are left untouched.
+_BAKE_VARIANT_JS = r"""
+() => {
+  const body = document.body;
+  if (!body) return 0;
+  const vw = window.innerWidth || 0;
+  const SKIP = { SCRIPT:1, STYLE:1, LINK:1, META:1, NOSCRIPT:1, TEMPLATE:1, BR:1, svg:1 };
+  const els = body.querySelectorAll('*');
+  const cap = Math.min(els.length, 8000);
+  // First pass: flag elements whose live box carries runtime layout - a
+  // transform (Framer scales fixed-width breakpoint content to fit) or a used
+  // width wider than the viewport (a fixed-width component the runtime clips
+  // inside a smaller box). ``getComputedStyle`` is read pre-transform, so the
+  // used width of a scaled component is still its authored width.
+  const flag = new Set();
+  for (let i = 0; i < cap; i++) {
+    const el = els[i];
+    if (SKIP[el.tagName]) continue;
+    if (el.tagName !== 'svg' && el.closest && el.closest('svg')) continue;
+    const cs = getComputedStyle(el);
+    const transformed = cs.transform && cs.transform !== 'none';
+    const wide = parseFloat(cs.width) > vw + 4;
+    if (transformed || wide) {
+      flag.add(el);
+      // its ancestors hold the (often smaller, clipped) box it sits in, so pin
+      // them too: that is what keeps the page from ballooning offline.
+      for (let p = el.parentElement; p && p !== body; p = p.parentElement) {
+        if (SKIP[p.tagName]) continue;
+        flag.add(p);
+      }
+    }
+  }
+  let n = 0;
+  for (const el of flag) {
+    try {
+      const cs = getComputedStyle(el);
+      // Used (pre-transform) box size + the element's own transform. Baking each
+      // element's own size and transform reproduces the live cascade exactly,
+      // with no double-counting of ancestor transforms.
+      const w = parseFloat(cs.width), h = parseFloat(cs.height);
+      if (!isNaN(w) && w >= 1) el.style.setProperty('width', Math.round(w * 100) / 100 + 'px');
+      if (!isNaN(h) && h >= 1) el.style.setProperty('height', Math.round(h * 100) / 100 + 'px');
+      if (cs.transform && cs.transform !== 'none') {
+        el.style.setProperty('transform', cs.transform);
+        el.style.setProperty('transform-origin', cs.transformOrigin);
+      }
+      n++;
+    } catch (e) {}
+  }
+  return n;
+}
+"""
+
 # Structural path of an element, anchored on the nearest unique id.
 _PATH_FN = r"""
   const body = document.body;
@@ -472,6 +580,7 @@ _SCROLL_STATE_JS = "async () => {" + _PATH_FN + r"""
 
 
 _LOW_MEM_MAX_SHOT_H = 6000   # px; reference and generated shots use the same cap
+_MAX_SHOT_H = 30000          # px; height cap for full-tier shots (very tall pages)
 
 
 # Make web fonts faithful at capture time: a font declared with
@@ -503,6 +612,143 @@ _FONT_FIX_JS = r"""async () => {
   document.documentElement.style.setProperty('--rx-reflow', String(Date.now()));
   void document.documentElement.offsetHeight;
 }"""
+
+
+# --- Design extraction (for the Figma export) --------------------------------
+# Walks the fully rendered local copy and emits a NESTED tree of design nodes
+# that mirrors the DOM container structure, with real geometry + computed styles:
+#   FRAME : a container (fill/border/radius/shadow), with auto-layout parameters
+#           when it is a flexbox (direction, gap, padding, alignment).
+#   TEXT  : a text block (font, size, weight, colour, alignment).
+#   IMG   : an <img>/background image or an <svg> (vector).
+# Coordinates are RELATIVE to the parent. Pure wrappers (no paint, no layout,
+# one child) are collapsed, and each FRAME carries a structural signature so the
+# plugin can turn repeated siblings (cards, nav items) into components + instances.
+_DESIGN_JS = r"""
+() => {
+  const toRGBA = (s) => {
+    if (!s) return null;
+    const m = s.match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const p = m[1].split(',').map(x => parseFloat(x));
+    return [p[0] / 255, p[1] / 255, p[2] / 255, (p.length > 3 ? p[3] : 1)];
+  };
+  const parseShadow = (s) => {
+    if (!s || s === 'none' || s.indexOf('inset') >= 0) return null;
+    const cm = s.match(/rgba?\([^)]+\)/);
+    const color = cm ? toRGBA(cm[0]) : [0, 0, 0, 0.25];
+    const nums = ((cm ? s.replace(cm[0], '') : s).match(/-?\d*\.?\d+px/g) || []).map(x => parseFloat(x));
+    if (nums.length < 2) return null;
+    return { x: nums[0] || 0, y: nums[1] || 0, blur: nums[2] || 0, spread: nums[3] || 0, color };
+  };
+  const abs = (u) => { try { return new URL(u, document.baseURI).href; } catch (e) { return null; } };
+  const px = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+  const INLINE = { A:1,SPAN:1,STRONG:1,EM:1,B:1,I:1,U:1,SMALL:1,LABEL:1,CODE:1,MARK:1,SUB:1,SUP:1,BR:1,ABBR:1,CITE:1,Q:1,S:1,TIME:1,WBR:1,DEL:1,INS:1,BDI:1,BDO:1,DFN:1,KBD:1,SAMP:1,VAR:1 };
+  const SKIP = { SCRIPT:1,STYLE:1,LINK:1,META:1,NOSCRIPT:1,TEMPLATE:1,HEAD:1 };
+  const mapJ = (j) => ({ 'flex-start':'MIN','center':'CENTER','flex-end':'MAX','space-between':'SPACE_BETWEEN','space-around':'SPACE_BETWEEN','space-evenly':'SPACE_BETWEEN' }[j] || 'MIN');
+  const mapA = (a) => ({ 'flex-start':'MIN','center':'CENTER','flex-end':'MAX','stretch':'MIN','baseline':'BASELINE','normal':'MIN' }[a] || 'MIN');
+  const pageW = document.documentElement.clientWidth;
+  const pageH = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+  let budget = 1500;
+
+  const styleFrame = (cs, node) => {
+    const bg = toRGBA(cs.backgroundColor);
+    if (bg && bg[3] > 0.01) node.fill = bg;
+    const bw = px(cs.borderTopWidth), bc = toRGBA(cs.borderTopColor);
+    if (bw > 0.4 && bc && bc[3] > 0.01) { node.borderColor = bc; node.borderW = bw; }
+    const sh = parseShadow(cs.boxShadow); if (sh) node.shadow = sh;
+    const rad = px(cs.borderTopLeftRadius); if (rad) node.radius = rad;
+    if (cs.overflow === 'hidden' || cs.overflow === 'clip') node.clip = true;
+  };
+  const autoLayout = (cs, node) => {
+    if (cs.display !== 'flex' && cs.display !== 'inline-flex') return;
+    const col = (cs.flexDirection || '').indexOf('column') === 0;
+    node.layout = col ? 'VERTICAL' : 'HORIZONTAL';
+    node.gap = col ? px(cs.rowGap) : px(cs.columnGap);
+    node.pad = [px(cs.paddingTop), px(cs.paddingRight), px(cs.paddingBottom), px(cs.paddingLeft)];
+    node.primary = mapJ(cs.justifyContent);
+    node.counter = mapA(cs.alignItems);
+    if (cs.flexWrap === 'wrap') node.wrap = true;
+  };
+  const isTextBlock = (el) => {
+    let hasText = false;
+    for (const n of el.childNodes) {
+      if (n.nodeType === 3) { if (n.nodeValue.trim()) hasText = true; }
+      else if (n.nodeType === 1) {
+        if (INLINE[n.tagName]) continue;
+        const d = getComputedStyle(n).display;
+        if (d.indexOf('inline') === 0 || d === 'contents') continue;
+        return false;
+      }
+    }
+    return hasText;
+  };
+
+  const build = (el, pl, pt) => {
+    if (budget-- < 0 || SKIP[el.tagName]) return null;
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return null;
+    const op = parseFloat(cs.opacity); if (op < 0.02) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return null;
+    if (r.top > pageH + 400 || (r.top + r.height) < -400 || r.left > pageW + 400 || (r.left + r.width) < -400) return null;
+    const node = { x: Math.round((r.left - pl) * 10) / 10, y: Math.round((r.top - pt) * 10) / 10,
+                   w: Math.round(r.width), h: Math.round(r.height) };
+    if (op < 1) node.opacity = op;
+    const tag = el.tagName.toLowerCase();
+
+    if (tag === 'img' && (el.currentSrc || el.getAttribute('src'))) {
+      node.t = 'IMG'; node.src = el.currentSrc || abs(el.getAttribute('src'));
+      const rad = px(cs.borderTopLeftRadius); if (rad) node.radius = rad;
+      return node;
+    }
+    if (tag === 'svg') {
+      try { node.t = 'IMG'; node.svg = new XMLSerializer().serializeToString(el); return node; } catch (e) { return null; }
+    }
+    if (isTextBlock(el)) {
+      let txt = (el.innerText || el.textContent || '').replace(/ /g, ' ').trim();
+      if (!txt) return null;
+      if (txt.length > 2000) txt = txt.slice(0, 2000);
+      const lh = cs.lineHeight;
+      node.t = 'TEXT'; node.text = txt;
+      node.font = (cs.fontFamily || '').split(',')[0].replace(/["']/g, '').trim();
+      node.size = px(cs.fontSize) || 16; node.weight = parseInt(cs.fontWeight) || 400;
+      node.color = toRGBA(cs.color) || [0, 0, 0, 1]; node.align = cs.textAlign;
+      if (lh && lh.endsWith('px')) node.lh = px(lh);
+      if (cs.letterSpacing && cs.letterSpacing.endsWith('px')) node.ls = px(cs.letterSpacing);
+      return node;
+    }
+    node.t = 'FRAME'; node.children = [];
+    styleFrame(cs, node);
+    autoLayout(cs, node);
+    const bgi = cs.backgroundImage;
+    if (bgi && bgi.indexOf('url(') === 0) {
+      const mu = bgi.match(/url\(["']?([^"')]+)["']?\)/);
+      if (mu) node.children.push({ t: 'IMG', x: 0, y: 0, w: node.w, h: node.h, src: abs(mu[1]), fit: 'cover', radius: node.radius || 0 });
+    }
+    for (const kid of el.children) { const c = build(kid, r.left, r.top); if (c) node.children.push(c); }
+    const painted = node.fill || node.borderColor || node.shadow;
+    if (!node.children.length && !painted) return null;
+    // Collapse a pure wrapper (no paint, no layout, one child) into its child.
+    if (node.children.length === 1 && !node.layout && !painted && !node.clip && !node.radius) {
+      const c = node.children[0];
+      c.x = (c.x || 0) + node.x; c.y = (c.y || 0) + node.y;
+      if (node.opacity != null && node.opacity < 1) c.opacity = Math.min(c.opacity == null ? 1 : c.opacity, node.opacity);
+      return c;
+    }
+    const cls = (el.getAttribute('class') || '').split(/\s+/)[0] || '';
+    node.sig = tag + '.' + cls + ':' + node.children.map(c => c.t[0]).join('') + ':' + node.children.length;
+    return node;
+  };
+
+  let bg = toRGBA(getComputedStyle(document.body).backgroundColor);
+  if (!bg || bg[3] < 0.02) bg = [1, 1, 1, 1];
+  const children = [];
+  for (const kid of document.body.children) { const c = build(kid, 0, 0); if (c) children.push(c); }
+  const root = { t: 'FRAME', x: 0, y: 0, w: Math.round(pageW), h: Math.round(pageH), children };
+  return { w: Math.round(pageW), h: Math.round(pageH), bg, name: document.title || '', root };
+}
+"""
 
 
 class Renderer:
@@ -541,13 +787,18 @@ class Renderer:
     async def __aexit__(self, *exc) -> None:
         await self.close()
 
-    async def _new_context(self, vp: Viewport, block: bool = True):
+    async def _new_context(self, vp: Viewport, block: bool = True,
+                           reduced_motion: bool = False):
         assert self._browser is not None, "Renderer not started"
         context = await self._browser.new_context(
             viewport={"width": vp.width, "height": vp.height},
             device_scale_factor=1,
             ignore_https_errors=True,
             service_workers="block",
+            # For deterministic quality shots: reduced-motion makes JS runtimes
+            # that honour it (Framer, GSAP, ...) render the settled final state
+            # instead of an entrance animation caught mid-flight.
+            reduced_motion="reduce" if reduced_motion else "no-preference",
         )
         if block and settings.block_trackers:
             await context.route(_BLOCK_RE, lambda route: route.abort())
@@ -659,6 +910,7 @@ class Renderer:
 
             # Screenshots + layout signatures per requested viewport.
             await self._freeze(page)
+            primary_vp = viewport_names[0] if viewport_names else "desktop"
             for name in viewport_names:
                 vp = self._vp(name)
                 try:
@@ -669,6 +921,22 @@ class Renderer:
                     result.signatures[name] = await page.evaluate(SIGNATURE_JS)
                     result.analysis.setdefault("vp_styles", {})[name] = await page.evaluate(
                         STYLE_DIFF_JS, result.analysis.get("base_styles") or {})
+                    # Capture the re-rendered <body> for every non-primary
+                    # breakpoint (Framer & co. swap the DOM per breakpoint). The
+                    # serialised body is injected into the copy and shown at this
+                    # width; the primary body is already in result.html. Skipped
+                    # on low-memory hosts to keep the footprint small.
+                    if name != primary_vp and not settings.low_memory:
+                        await page.evaluate(_PREPARE_VARIANT_JS)
+                        # Bake the live runtime layout (scaled fixed-width
+                        # components) so the stripped-runtime copy keeps it.
+                        try:
+                            await page.evaluate(_BAKE_VARIANT_JS)
+                        except Exception:
+                            pass
+                        body_html = await page.evaluate(_SERIALIZE_BODY_JS)
+                        if body_html:
+                            result.analysis.setdefault("bp_dom", {})[name] = body_html
                 except Exception as exc:  # pragma: no cover - screenshot is best effort
                     log.warning("screenshot %s@%s failed: %s", url, name, exc)
         except Exception as exc:
@@ -687,7 +955,7 @@ class Renderer:
     async def inspect_url(self, url: str, viewport_name: str) -> tuple[bytes, dict] | None:
         """Return ``(full-page png, layout signature)`` for a generated page."""
         vp = self._vp(viewport_name)
-        context = await self._new_context(vp, block=False)
+        context = await self._new_context(vp, block=False, reduced_motion=True)
         page = await context.new_page()
         try:
             await page.goto(url, wait_until="load", timeout=settings.nav_timeout_ms)
@@ -703,14 +971,41 @@ class Renderer:
         finally:
             await context.close()
 
+    async def extract_design(self, url: str, viewport_name: str = "desktop") -> dict | None:
+        """Open a (local) copy and return its design tree for the Figma export."""
+        vp = self._vp(viewport_name)
+        context = await self._new_context(vp, block=False, reduced_motion=True)
+        page = await context.new_page()
+        try:
+            await page.goto(url, wait_until="load", timeout=settings.nav_timeout_ms)
+            await self._fonts_ready(page)
+            await self._freeze(page)
+            await self._settle(page, scroll=True)      # trigger lazy + reveal
+            await page.evaluate("() => window.scrollTo(0, 0)")
+            await page.wait_for_timeout(200)
+            return await page.evaluate(_DESIGN_JS)
+        except Exception as exc:  # pragma: no cover - best effort
+            log.warning("design extract failed %s@%s: %s", url, viewport_name, exc)
+            return None
+        finally:
+            await context.close()
+
     async def _shot(self, page, vp: Viewport) -> bytes:
-        if not settings.low_memory:
-            return await page.screenshot(full_page=True, type="png")
+        # Always clip to the viewport WIDTH (full height). A full-page capture
+        # expands to the document's scroll *width* too, so a single horizontally
+        # overflowing element - a marquee, a JS-pinned horizontal-scroll gallery
+        # whose clipping is lost with its script - blows the frame out to
+        # thousands of px wide and wrecks the comparison against the (clipped)
+        # original. Clipping to the width a visitor actually sees keeps original
+        # and copy on the same frame and is faithful to the live screenshot.
         height = await page.evaluate(
             "() => Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)")
-        cap = max(vp.height, min(int(height or vp.height), _LOW_MEM_MAX_SHOT_H))
+        cap = _LOW_MEM_MAX_SHOT_H if settings.low_memory else _MAX_SHOT_H
+        h = max(vp.height, min(int(height or vp.height), cap))
+        # full_page=True is required for the clip to reach past the viewport;
+        # clip then bounds the WIDTH to what a visitor sees (and the height cap).
         return await page.screenshot(full_page=True, type="png",
-                                     clip={"x": 0, "y": 0, "width": vp.width, "height": cap})
+                                     clip={"x": 0, "y": 0, "width": vp.width, "height": h})
 
     async def _fonts_ready(self, page) -> None:
         try:

@@ -89,6 +89,29 @@ PANEL: list[Site] = [
     Site("mdn",       "https://developer.mozilla.org/en-US/", "docs-dense",  "single_page", 1, 0),
     Site("remix",     "https://remix.run/",              "react-animated",   "single_page", 1, 0),
 ]
+
+# --------------------------------------------------------------------------- #
+# Framer panel: published Framer templates, heavy on motion (scroll-reveal,    #
+# hover, sticky/horizontal scroll, custom cursors). These stress the engine's  #
+# end-to-end behaviour fidelity - the whole point of the Framer target is to   #
+# reproduce the live workflow (click / hover / scroll animations) offline.     #
+# Single long landing page each (single_page), so depth 0 / one page.          #
+# --------------------------------------------------------------------------- #
+FRAMER_PANEL: list[Site] = [
+    Site("dossier",   "https://dossier.framer.website/",     "framer-portfolio", "single_page", 1, 0),
+    Site("adriel",    "https://adrielmotion.framer.website/", "framer-cinematic", "single_page", 1, 0),
+    Site("monodrift", "https://monodrift.framer.website/",   "framer-studio",    "single_page", 1, 0),
+    Site("layeron",   "https://layeron.framer.website/",     "framer-agency",    "single_page", 1, 0),
+    Site("portiva",   "https://portiva.framer.website/",     "framer-creative",  "single_page", 1, 0),
+    Site("agenlio",   "https://agenlio.framer.website/",     "framer-portfolio", "single_page", 1, 0),
+    Site("portvio",   "https://portvio.framer.website/",     "framer-portfolio", "single_page", 1, 0),
+    Site("qarin",     "https://qarin.framer.website/",       "framer-saas",      "single_page", 1, 0),
+    Site("aster",     "https://aster.framer.website/",       "framer-wellness",  "single_page", 1, 0),
+    Site("bolddot",   "https://bolddot.framer.website/",     "framer-design",    "single_page", 1, 0),
+]
+
+PANEL += FRAMER_PANEL
+FRAMER_SLUGS = [s.slug for s in FRAMER_PANEL]
 PANEL_BY_SLUG = {s.slug: s for s in PANEL}
 
 # Two viewports are enough signal for the benchmark while halving compare cost.
@@ -342,11 +365,19 @@ def cmd_list(sites: list[Site]) -> None:
 def _select(only: list[str] | None) -> list[Site]:
     if not only:
         return list(PANEL)
-    chosen = []
+    chosen: list[Site] = []
+    seen: set[str] = set()
     for slug in only:
+        # Convenience groups: "framer" expands to the whole Framer panel.
+        if slug == "framer":
+            for s in FRAMER_PANEL:
+                if s.slug not in seen:
+                    chosen.append(s); seen.add(s.slug)
+            continue
         if slug not in PANEL_BY_SLUG:
-            raise SystemExit(f"Unknown site '{slug}'. Known: {', '.join(PANEL_BY_SLUG)}")
-        chosen.append(PANEL_BY_SLUG[slug])
+            raise SystemExit(f"Unknown site '{slug}'. Known: framer, {', '.join(PANEL_BY_SLUG)}")
+        if slug not in seen:
+            chosen.append(PANEL_BY_SLUG[slug]); seen.add(slug)
     return chosen
 
 

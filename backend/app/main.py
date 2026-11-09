@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
+from app.api.auth_routes import router as auth_router
 from app.api.routes import router as api_router
 from app.api.websocket import ws_router
 from app.config import REPO_ROOT, settings
@@ -30,11 +31,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    if settings.app_password:
-        from app.core.auth import BasicAuthMiddleware
-        app.add_middleware(BasicAuthMiddleware, password=settings.app_password)
-        log.info("Password protection enabled (APP_PASSWORD)")
+    if settings.google_oauth_enabled:
+        log.info("Google sign-in enabled")
+    elif settings.dev_auth:
+        log.warning("DEV_AUTH enabled: local dev-login active (do NOT use in production)")
+    else:
+        log.warning("No auth configured: set GOOGLE_CLIENT_ID/SECRET, or DEV_AUTH=true for local testing")
 
+    app.include_router(auth_router)
     app.include_router(api_router)
     app.include_router(ws_router)
 

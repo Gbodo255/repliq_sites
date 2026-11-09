@@ -2,11 +2,11 @@ import { Badge } from "@/components/ui";
 import type { JobStatus } from "@/types";
 
 const MAP: Record<JobStatus, { label: string; variant: "success" | "warn" | "error" | "default" | "muted" }> = {
-  completed: { label: "Completed", variant: "success" },
-  running: { label: "Running", variant: "default" },
-  queued: { label: "Queued", variant: "muted" },
-  failed: { label: "Failed", variant: "error" },
-  cancelled: { label: "Cancelled", variant: "warn" },
+  completed: { label: "Terminé", variant: "success" },
+  running: { label: "En cours", variant: "default" },
+  queued: { label: "En file", variant: "muted" },
+  failed: { label: "Échec", variant: "error" },
+  cancelled: { label: "Annulé", variant: "warn" },
 };
 
 export function StatusBadge({ status }: { status: JobStatus }) {

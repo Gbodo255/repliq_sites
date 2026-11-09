@@ -1,84 +1,100 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Plus, Globe, Moon, Sun, Github } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Plus, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui";
+import Logo from "@/components/Logo";
+import { useAuth } from "@/lib/auth";
 
 const NAV = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/new", label: "New replication", icon: Plus, end: false },
+  { to: "/app", label: "Dashboard", end: true },
+  { to: "/app/new", label: "Nouvelle réplication", end: false },
 ];
 
-export default function Layout({ children }: { children: React.ReactNode }) {
-  const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
-  const navigate = useNavigate();
+function Avatar({ name, picture }: { name: string; picture: string }) {
+  if (picture) {
+    return <img src={picture} alt="" className="h-8 w-8 rounded-full border border-border" referrerPolicy="no-referrer" />;
+  }
+  const initial = (name || "?").trim().charAt(0).toUpperCase();
+  return (
+    <span className="grid h-8 w-8 place-items-center rounded-full bg-ink text-[13px] font-semibold text-white">
+      {initial}
+    </span>
+  );
+}
 
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-  }, [dark]);
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  const onLogout = async () => {
+    await logout();
+    navigate("/");
+  };
 
   return (
-    <div className="min-h-screen flex">
-      {/* Sidebar */}
-      <aside className="hidden md:flex w-64 flex-col border-r bg-card/50 backdrop-blur">
-        <div className="flex items-center gap-2.5 px-5 h-16 border-b">
-          <div className="grid h-9 w-9 place-items-center rounded-lg bg-primary text-primary-foreground">
-            <Globe className="h-5 w-5" />
+    <div className="min-h-screen bg-white">
+      <header className="sticky top-0 z-40 border-b border-border bg-white/85 backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-content items-center justify-between gap-4 px-4 md:px-8">
+          <div className="flex items-center gap-6">
+            <button onClick={() => navigate("/app")} aria-label="Accueil app"><Logo /></button>
+            <nav className="hidden items-center gap-1 md:flex">
+              {NAV.map(({ to, label, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  className={({ isActive }) =>
+                    cn(
+                      "rounded-lg px-3 py-2 text-[14.5px] font-medium transition-colors",
+                      isActive ? "bg-panel text-ink" : "text-muted hover:text-ink"
+                    )
+                  }
+                >
+                  {label}
+                </NavLink>
+              ))}
+            </nav>
           </div>
-          <div className="leading-tight">
-            <div className="font-bold">Replicator</div>
-            <div className="text-xs text-muted-foreground">Website engine</div>
+
+          <div className="flex items-center gap-2.5">
+            <Button size="sm" onClick={() => navigate("/app/new")} className="hidden sm:inline-flex">
+              <Plus className="h-4 w-4" /> Nouvelle
+            </Button>
+            {user && (
+              <div className="flex items-center gap-2.5">
+                <Avatar name={user.name} picture={user.picture} />
+                <span className="hidden text-sm font-medium text-ink lg:block">{user.name}</span>
+                <button
+                  onClick={onLogout}
+                  title="Se déconnecter"
+                  className="grid h-9 w-9 place-items-center rounded-lg text-muted hover:bg-panel hover:text-ink"
+                >
+                  <LogOut className="h-4 w-4" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
-        <nav className="flex-1 p-3 space-y-1">
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+        {/* Mobile nav */}
+        <div className="flex items-center gap-1 border-t border-border px-4 py-2 md:hidden">
+          {NAV.map(({ to, label, end }) => (
             <NavLink
               key={to}
               to={to}
               end={end}
               className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                )
+                cn("rounded-lg px-3 py-1.5 text-sm font-medium", isActive ? "bg-panel text-ink" : "text-muted")
               }
             >
-              <Icon className="h-4 w-4" />
               {label}
             </NavLink>
           ))}
-        </nav>
-        <div className="p-3 border-t space-y-1">
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDark((d) => !d)}>
-            {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            {dark ? "Light mode" : "Dark mode"}
-          </Button>
-          <a
-            href="/api/docs"
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-secondary"
-          >
-            <Github className="h-4 w-4" />
-            API docs
-          </a>
         </div>
-      </aside>
+      </header>
 
-      {/* Main */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="md:hidden flex items-center justify-between h-14 px-4 border-b">
-          <button className="flex items-center gap-2 font-bold" onClick={() => navigate("/")}>
-            <Globe className="h-5 w-5 text-primary" /> Replicator
-          </button>
-          <Button size="sm" onClick={() => navigate("/new")}>
-            <Plus className="h-4 w-4" /> New
-          </Button>
-        </header>
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-6xl px-4 md:px-8 py-6 md:py-8 animate-fade-in">{children}</div>
-        </main>
-      </div>
+      <main>
+        <div className="mx-auto max-w-content px-4 py-8 md:px-8 md:py-10 animate-fade-in">{children}</div>
+      </main>
     </div>
   );
 }

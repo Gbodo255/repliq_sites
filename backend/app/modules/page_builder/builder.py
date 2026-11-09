@@ -14,11 +14,14 @@ Given the rendered pages and a populated :class:`AssetStore`, the builder:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import posixpath
 from pathlib import Path
 
 import re
+
+from bs4 import BeautifulSoup
 
 from app.core.logging import get_logger
 from app.modules.auto_fixer.layout import media_ranges
@@ -105,6 +108,11 @@ class SiteBuilder:
             if p.html:
                 for u in collect_asset_urls(p.html, base, self.options.keep_js):
                     add(u)
+            # Assets referenced only by a smaller-breakpoint DOM variant
+            # (Framer re-renders per breakpoint) must be downloaded too.
+            for vhtml in ((p.analysis or {}).get("bp_dom") or {}).values():
+                for u in collect_asset_urls(vhtml, base, self.options.keep_js):
+                    add(u)
             for u in p.stylesheet_urls:
                 add(u)
             # Runtime-loaded resources that are clearly assets (bg images, fonts...).
@@ -190,6 +198,14 @@ class SiteBuilder:
                 body_attrs["data-rx-scroll"] = scroll_state
             p_html = self._inject_body_attrs(p.html, body_attrs)
 
+            # Per-breakpoint DOM variants (Framer & other runtimes re-render a
+            # different DOM per breakpoint; a single captured DOM only matches at
+            # the primary width). Inject each distinct variant and switch by
+            # width so the copy matches the live site at every viewport.
+            p_html, bp_css = self._merge_bp_variants(p, p_html)
+            if bp_css:
+                head_inject += f'<style id="rx-breakpoints">{bp_css}</style>'
+
             html = localize_html(
                 p_html, p.final_url or p.url, page_dir,
                 asset_lookup, page_lookup,
@@ -250,6 +266,105 @@ class SiteBuilder:
         injected = "<body " + " ".join(parts)
         # A function replacement avoids re.sub interpreting backslashes (<).
         return re.sub(r"<body\b", lambda _m: injected, html, count=1, flags=re.I)
+
+    # ----------------------------------------------------- breakpoint variants
+    _VARIANT_SKIP_TAGS = {"script", "style", "link", "meta", "noscript", "template"}
+
+    @classmethod
+    def _dominant_root(cls, body) -> tuple:
+        """The body's main content wrapper (most descendants), e.g. Framer's
+        ``<div id="main">``. Scripts/links/meta are ignored."""
+        best, best_n = None, -1
+        for child in body.find_all(recursive=False):
+            if not getattr(child, "name", None) or child.name in cls._VARIANT_SKIP_TAGS:
+                continue
+            n = len(child.find_all(True))
+            if n > best_n:
+                best, best_n = child, n
+        return best, best_n
+
+    @staticmethod
+    def _struct_fp(root) -> str:
+        """Structural fingerprint (tag + first class per descendant). Two DOMs
+        that a framework re-rendered for different breakpoints differ here
+        (Framer swaps the breakpoint ancestor class); a single CSS-responsive
+        DOM is identical, so its variant is skipped (no bloat)."""
+        parts = []
+        for el in root.find_all(True)[:4000]:
+            cls = el.get("class") or []
+            parts.append(el.name + "." + (cls[0] if cls else ""))
+        return hashlib.md5("|".join(parts).encode("utf-8", "ignore")).hexdigest()
+
+    def _merge_bp_variants(self, page: RenderedPage, primary_html: str) -> tuple[str, str]:
+        """Inject each distinct per-breakpoint DOM variant as a sibling content
+        root and return ``(merged_html, media_css)`` that shows exactly one per
+        width. No-op when no variant was captured or all variants match the
+        primary DOM (pure CSS-responsive site)."""
+        bp_dom = (page.analysis or {}).get("bp_dom") or {}
+        vps = list(self.options.viewport_names)
+        if not bp_dom or len(vps) < 2:
+            return primary_html, ""
+        primary_vp = vps[0]
+        soup = BeautifulSoup(primary_html, "lxml")
+        body = soup.body
+        if body is None:
+            return primary_html, ""
+        proot, pn = self._dominant_root(body)
+        if proot is None or pn < 20:
+            return primary_html, ""
+        proot_fp = self._struct_fp(proot)
+        # groups[i] = {vps:set, fp:str, tag:str}; group 0 is the primary DOM.
+        groups = [{"vps": {primary_vp}, "fp": proot_fp, "tag": "g0"}]
+        for name in vps[1:]:
+            vhtml = bp_dom.get(name)
+            if not vhtml:
+                groups[0]["vps"].add(name)
+                continue
+            vbody = BeautifulSoup(vhtml, "lxml").body
+            vroot, vn = (self._dominant_root(vbody) if vbody else (None, -1))
+            if vroot is None or vn < 20:
+                groups[0]["vps"].add(name)
+                continue
+            vfp = self._struct_fp(vroot)
+            match = next((g for g in groups if g["fp"] == vfp), None)
+            if match is not None:
+                match["vps"].add(name)
+                continue
+            tag = f"g{len(groups)}"
+            vroot["data-rx-bpv"] = tag
+            proot.insert_after(vroot)
+            groups.append({"vps": {name}, "fp": vfp, "tag": tag})
+        if len(groups) == 1:
+            return primary_html, ""   # every breakpoint shares the primary DOM
+        proot["data-rx-bpv"] = "g0"
+        ranges = media_ranges(vps)
+        css = ["/* rx-breakpoints: per-breakpoint DOM variants (framework re-render) */"]
+        for g in groups:
+            for vp_name, (lo, hi) in ranges.items():
+                if vp_name in g["vps"]:
+                    continue
+                conds = []
+                if lo:
+                    conds.append(f"(min-width:{lo}px)")
+                if hi is not None:
+                    conds.append(f"(max-width:{hi}px)")
+                guard = f"@media {' and '.join(conds)}" if conds else "@media all"
+                css.append(f'{guard}{{[data-rx-bpv="{g["tag"]}"]{{display:none!important}}}}')
+        # The @media rules above are a no-JS fallback. A framework (Framer) often
+        # pins its own `display:...!important` on a variant root, whose id/class
+        # selector outranks our ``[data-rx-bpv]`` attribute selector, so the
+        # hidden variant would leak and double the page height. Emit the visible
+        # width range per group so interactions.js enforces the choice with an
+        # inline ``!important`` display, which beats any stylesheet rule.
+        bpv_ranges = []
+        for g in groups:
+            los = [ranges[v][0] for v in g["vps"] if v in ranges]
+            his = [ranges[v][1] for v in g["vps"] if v in ranges]
+            lo = min(los) if los else 0
+            hi = None if any(h is None for h in his) else (max(his) if his else None)
+            bpv_ranges.append([g["tag"], lo, hi])
+        body["data-rx-bpv-ranges"] = json.dumps(bpv_ranges, separators=(",", ":"))
+        return str(soup), "\n".join(css)
 
     def _breakpoint_classes(self, page: RenderedPage) -> list:
         """Classes that the original JavaScript toggles per breakpoint.

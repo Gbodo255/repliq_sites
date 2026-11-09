@@ -12,8 +12,11 @@ TARGETS: dict[str, dict] = {
     "nextjs": {"label": "Next.js", "arc": "site-nextjs"},
     "wordpress_theme": {"label": "WordPress theme", "arc": "wordpress-theme"},
     "wordpress_headless": {"label": "WordPress headless (Next.js)", "arc": "wordpress-headless"},
+    "figma": {"label": "Figma (plugin)", "arc": "figma"},
 }
 WORDPRESS_TARGETS = {"wordpress_theme", "wordpress_headless"}
+# Needs a browser pass over the generated copy; handled by the service, not build_target.
+BROWSER_TARGETS = {"figma"}
 
 
 def normalize_targets(values) -> list[str]:
@@ -29,6 +32,8 @@ def build_target(target: str, *, site_dir: Path, out_root: Path, exports_dir: Pa
     from app.modules.targets.react_next import build_next, build_react
     from app.modules.targets.wordpress import build_wp_headless, build_wp_theme
 
+    if target in BROWSER_TARGETS:
+        raise RuntimeError(f"{target} must be built by the replication service (browser pass)")
     exports_dir.mkdir(parents=True, exist_ok=True)
     zip_path = exports_dir / f"{target}.zip"
     arc = TARGETS[target]["arc"]

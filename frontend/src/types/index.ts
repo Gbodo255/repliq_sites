@@ -1,6 +1,18 @@
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  picture: string;
+}
+
+export interface AuthConfig {
+  google: boolean;
+  dev: boolean;
+}
+
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type ReplicationMode = "auto" | "full" | "single_page";
-export type OutputTarget = "static" | "react" | "nextjs" | "wordpress_theme" | "wordpress_headless";
+export type OutputTarget = "static" | "react" | "nextjs" | "wordpress_theme" | "wordpress_headless" | "figma";
 
 export interface ExportRecord {
   target: OutputTarget;

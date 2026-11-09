@@ -1,35 +1,43 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  darkMode: ["class"],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        primary: { DEFAULT: "hsl(var(--primary))", foreground: "hsl(var(--primary-foreground))" },
-        secondary: { DEFAULT: "hsl(var(--secondary))", foreground: "hsl(var(--secondary-foreground))" },
-        muted: { DEFAULT: "hsl(var(--muted))", foreground: "hsl(var(--muted-foreground))" },
-        accent: { DEFAULT: "hsl(var(--accent))", foreground: "hsl(var(--accent-foreground))" },
-        destructive: { DEFAULT: "hsl(var(--destructive))", foreground: "hsl(var(--destructive-foreground))" },
-        card: { DEFAULT: "hsl(var(--card))", foreground: "hsl(var(--card-foreground))" },
+        // Tessel brand tokens
+        bg: "var(--bg)",
+        ink: "var(--ink)",
+        faint: "var(--faint)",
+        accent: { DEFAULT: "var(--accent)", 600: "var(--accent-600)", ink: "var(--accent-ink)" },
+        panel: { DEFAULT: "var(--panel)", 2: "var(--panel-2)" },
+        border: { DEFAULT: "var(--border)", strong: "var(--border-strong)" },
+        // Shadcn-compatible aliases (mapped to Tessel values) so the in-app
+        // screens keep rendering; `muted` is gray so text-muted == text-muted-foreground.
+        muted: { DEFAULT: "var(--muted)", foreground: "var(--muted)" },
+        background: "var(--bg)",
+        foreground: "var(--ink)",
+        card: { DEFAULT: "var(--bg)", foreground: "var(--ink)" },
+        primary: { DEFAULT: "var(--accent)", foreground: "var(--accent-ink)" },
+        secondary: { DEFAULT: "var(--panel)", foreground: "var(--ink)" },
+        destructive: { DEFAULT: "#d23b3b", foreground: "#ffffff" },
+        input: "var(--border-strong)",
+        ring: "var(--accent)",
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        xl: "var(--radius)",
+        "2xl": "calc(var(--radius) + 6px)",
+        "3xl": "calc(var(--radius) + 14px)",
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        display: ['"Space Grotesk"', '"Inter"', "ui-sans-serif", "system-ui", "sans-serif"],
+        sans: ['"Inter"', "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ['"JetBrains Mono"', "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
+      maxWidth: { content: "1180px" },
       keyframes: {
-        "fade-in": { from: { opacity: "0", transform: "translateY(4px)" }, to: { opacity: "1", transform: "none" } },
+        "fade-in": { from: { opacity: "0", transform: "translateY(6px)" }, to: { opacity: "1", transform: "none" } },
       },
-      animation: { "fade-in": "fade-in 0.3s ease-out" },
+      animation: { "fade-in": "fade-in 0.4s ease-out both" },
     },
   },
   plugins: [],

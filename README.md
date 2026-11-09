@@ -163,6 +163,55 @@ Sur **Hugging Face Spaces** (gratuit, 16 Go de RAM) : créer un Space de type
 paramètres du Space. Sans `APP_PASSWORD`, l'instance est ouverte à tous.
 Le stockage d'un Space gratuit est éphémère : téléchargez vos exports.
 
+## Authentification Google (mise en ligne)
+
+L'application est **protégée par une connexion Google** : la page d'accueil est
+publique, mais il faut se connecter (ou créer son compte) avec Google pour
+utiliser l'outil. Chaque utilisateur ne voit que **ses** réplications.
+
+### 1. Créer un identifiant OAuth Google
+
+1. Ouvrez [Google Cloud Console](https://console.cloud.google.com/) → créez (ou
+   choisissez) un projet.
+2. **APIs & Services → OAuth consent screen** : type « External », renseignez le
+   nom de l'app et votre e-mail. Ajoutez les scopes `openid`, `email`, `profile`.
+   Ajoutez votre adresse dans « Test users » tant que l'app est en test.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID** :
+   type **Web application**.
+   - *Authorized JavaScript origins* : l'origine publique de l'app
+     (ex. `https://votre-domaine`, et `http://localhost:5173` en dev).
+   - *Authorized redirect URIs* : **exactement**
+     `https://votre-domaine/api/auth/google/callback`
+     (et `http://localhost:5173/api/auth/google/callback` en dev).
+4. Copiez le **Client ID** et le **Client secret**.
+
+### 2. Variables d'environnement
+
+Dans `backend/.env` (ou les variables de l'hébergeur) :
+
+| Variable | Rôle |
+|----------|------|
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Identifiants de l'OAuth client |
+| `OAUTH_REDIRECT_URI` | Doit correspondre **au caractère près** à l'URI de redirection déclarée |
+| `PUBLIC_BASE_URL` | Origine publique (sert à déduire l'URI de redirection si vide) |
+| `SESSION_SECRET` | Secret de signature du cookie de session (valeur aléatoire longue en prod) |
+| `COOKIE_SECURE` | `true` en production (cookie envoyé uniquement en HTTPS) |
+| `SESSION_DAYS` | Durée de la session (jours, défaut 30) |
+| `DEV_AUTH` | `true` en local pour tester **sans** Google (bouton « Connexion dev ») |
+
+Générer un secret : `python -c "import secrets;print(secrets.token_urlsafe(48))"`.
+
+### 3. Tester en local sans Google
+
+```bat
+cd backend
+set DEV_AUTH=true
+.venv\Scripts\python.exe run.py
+```
+
+La page d'accueil affiche un bouton **Connexion (dev)** qui ouvre l'application
+avec un compte de test. Ne jamais activer `DEV_AUTH` en production.
+
 ## Prérequis
 
 - **Windows 10/11**

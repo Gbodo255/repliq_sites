@@ -91,6 +91,25 @@ class Settings:
     block_private_hosts: bool = field(default_factory=lambda: _bool("BLOCK_PRIVATE_HOSTS", True))
     default_fix_cycles: int = field(default_factory=lambda: _int("DEFAULT_FIX_CYCLES", 1))
 
+    # --- Authentication (Google OAuth) ---------------------------------------
+    # Set GOOGLE_CLIENT_ID/SECRET from a Google Cloud "Web application" OAuth
+    # client. OAUTH_REDIRECT_URI must exactly match an Authorized redirect URI
+    # there ("{PUBLIC_BASE_URL}/api/auth/google/callback"); left empty, it is
+    # derived from the incoming request. SESSION_SECRET signs the login cookie.
+    google_client_id: str = field(default_factory=lambda: _get("GOOGLE_CLIENT_ID", ""))
+    google_client_secret: str = field(default_factory=lambda: _get("GOOGLE_CLIENT_SECRET", ""))
+    oauth_redirect_uri: str = field(default_factory=lambda: _get("OAUTH_REDIRECT_URI", ""))
+    public_base_url: str = field(default_factory=lambda: _get("PUBLIC_BASE_URL", "").rstrip("/"))
+    session_secret: str = field(default_factory=lambda: _get("SESSION_SECRET", "dev-insecure-change-me"))
+    session_days: int = field(default_factory=lambda: _int("SESSION_DAYS", 30))
+    cookie_secure: bool = field(default_factory=lambda: _bool("COOKIE_SECURE", False))
+    # Local testing without real Google credentials: enables POST /api/auth/dev-login.
+    dev_auth: bool = field(default_factory=lambda: _bool("DEV_AUTH", False))
+
+    @property
+    def google_oauth_enabled(self) -> bool:
+        return bool(self.google_client_id and self.google_client_secret)
+
     viewports: tuple[Viewport, ...] = field(default_factory=lambda: tuple(DEFAULT_VIEWPORTS))
 
     @property

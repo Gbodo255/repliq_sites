@@ -9,8 +9,19 @@ services:
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
-      - key: APP_PASSWORD
-        sync: false          # asked when the Blueprint is created
+      # --- Google sign-in (mandatory) ---
+      - key: GOOGLE_CLIENT_ID
+        sync: false          # set in the Render dashboard
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false          # e.g. https://replicator-tools.onrender.com
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DEV_AUTH
+        value: "false"
       - key: LOW_MEMORY
         value: "true"
       - key: PAGE_CONCURRENCY

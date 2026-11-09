@@ -101,10 +101,10 @@ class JobManager:
         self._tasks[pid] = task
         task.add_done_callback(lambda _t, p=pid: self._tasks.pop(p, None))
 
-    def start(self, req) -> dict:
+    def start(self, req, user_id: str = "") -> dict:
         url = validate_target_url(req.url)       # raises UnsafeUrlError on bad input
         options = _resolve_options(req)
-        detail = store.create(req.name or "", url, options)
+        detail = store.create(req.name or "", url, options, user_id=user_id)
         self._spawn(detail["id"], self._run(detail["id"], url, options))
         return detail
 
@@ -297,6 +297,9 @@ class JobManager:
                                        "zip": store.zip_path(pid).name,
                                        "size": store.zip_path(pid).stat().st_size, "info": {}, "error": ""}
                     continue
+                if target == "figma":
+                    await self._build_figma(pid, detail, exports, emit)
+                    continue
                 if model is None:
                     from app.modules.targets.model import build_model
                     model = await asyncio.to_thread(build_model, site_dir, detail.get("pages", []), detail["url"])
@@ -316,6 +319,41 @@ class JobManager:
                 emit("export", f"{TARGETS[target]['label']} failed: {exc}", level="error")
         detail["exports"] = [exports[t] for t in TARGETS if t in exports]
         store.save(detail)
+
+    async def _build_figma(self, pid: str, detail: dict, exports: dict, emit) -> None:
+        """Re-render the generated copy to extract an editable Figma design."""
+        from app.modules.targets.figma import embed_tree, package_figma
+        site_dir = store.site_dir(pid)
+        records = [r for r in detail.get("pages", [])
+                   if r.get("status") == "built" and r.get("output_path")][:8]
+        if not records:
+            raise RuntimeError("No built page to export to Figma")
+        pages_out = []
+        async with Renderer() as renderer:
+            for r in records:
+                rel = r["output_path"]
+                file_uri = (site_dir / rel).resolve().as_uri()
+                tree = await renderer.extract_design(file_uri, "desktop")
+                root = (tree or {}).get("root")
+                if not root or not root.get("children"):
+                    continue
+                await asyncio.to_thread(embed_tree, root)
+                pages_out.append({"name": (r.get("title") or rel)[:60], "w": tree["w"],
+                                  "h": tree["h"], "bg": tree["bg"], "root": root})
+                emit("export", f"Figma: {rel} ({len(root['children'])} top blocks)")
+        if not pages_out:
+            raise RuntimeError("Design extraction produced no layers")
+        doc = {"name": detail.get("name") or detail.get("url") or "site", "pages": pages_out}
+        out_dir = store.outputs_dir(pid) / "figma"
+        import shutil as _sh
+        _sh.rmtree(out_dir, ignore_errors=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        store.exports_dir(pid).mkdir(parents=True, exist_ok=True)
+        zip_path = store.exports_dir(pid) / "figma.zip"
+        info = await asyncio.to_thread(package_figma, doc, out_dir, zip_path)
+        exports["figma"] = {"target": "figma", "label": TARGETS["figma"]["label"], "zip": zip_path.name,
+                            "size": zip_path.stat().st_size if zip_path.exists() else 0,
+                            "info": info, "error": ""}
 
     async def _build_outputs_job(self, pid: str, targets: list[str]) -> None:
         emit = self._emitter(pid)

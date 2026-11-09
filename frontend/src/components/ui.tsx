@@ -3,29 +3,30 @@ import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ Button */
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "default" | "secondary" | "outline" | "ghost" | "destructive";
+  variant?: "default" | "accent" | "secondary" | "outline" | "ghost" | "destructive";
   size?: "sm" | "md" | "lg" | "icon";
 };
 const BTN_VARIANTS: Record<string, string> = {
-  default: "bg-primary text-primary-foreground hover:opacity-90",
-  secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-  outline: "border border-input bg-transparent hover:bg-secondary",
-  ghost: "hover:bg-secondary",
-  destructive: "bg-destructive text-destructive-foreground hover:opacity-90",
+  default: "btn-primary",
+  accent: "btn-accent",
+  secondary: "btn-outline",
+  outline: "btn-outline",
+  ghost: "btn-ghost",
+  destructive:
+    "bg-[#d23b3b] text-white hover:brightness-105 active:translate-y-px transition",
 };
 const BTN_SIZES: Record<string, string> = {
-  sm: "h-8 px-3 text-sm",
-  md: "h-10 px-4 text-sm",
+  sm: "h-9 px-3.5 text-[13px]",
+  md: "h-11 px-5 text-[15px]",
   lg: "h-12 px-6 text-base",
-  icon: "h-9 w-9",
+  icon: "h-10 w-10 p-0",
 };
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = "default", size = "md", ...props }, ref) => (
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none",
+        "btn focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2",
         BTN_VARIANTS[variant],
         BTN_SIZES[size],
         className
@@ -36,18 +37,28 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = "Button";
 
+/* ----------------------------------------------------------------- Eyebrow */
+export function Eyebrow({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <span className={cn("eyebrow inline-flex items-center gap-2", className)}>
+      <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+      {children}
+    </span>
+  );
+}
+
 /* -------------------------------------------------------------------- Card */
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("rounded-xl border bg-card text-card-foreground shadow-sm", className)} {...props} />;
+  return <div className={cn("rounded-2xl border bg-white", className)} {...props} />;
 }
 export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("flex flex-col gap-1 p-5", className)} {...props} />;
 }
 export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h3 className={cn("font-semibold leading-tight tracking-tight", className)} {...props} />;
+  return <h3 className={cn("text-[17px] font-semibold tracking-tight text-ink", className)} {...props} />;
 }
 export function CardDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn("text-sm text-muted-foreground", className)} {...props} />;
+  return <p className={cn("text-sm text-muted", className)} {...props} />;
 }
 export function CardContent({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("p-5 pt-0", className)} {...props} />;
@@ -59,8 +70,8 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm",
-        "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
+        "flex h-11 w-full rounded-xl border border-border-strong bg-white px-3.5 text-[15px] text-ink",
+        "placeholder:text-faint focus-visible:outline-none focus-visible:border-ink focus-visible:ring-2 focus-visible:ring-accent/25 disabled:opacity-50",
         className
       )}
       {...props}
@@ -70,7 +81,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
 Input.displayName = "Input";
 
 export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
-  return <label className={cn("text-sm font-medium leading-none", className)} {...props} />;
+  return <label className={cn("text-sm font-medium text-ink", className)} {...props} />;
 }
 
 export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttributes<HTMLSelectElement>>(
@@ -78,8 +89,8 @@ export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttrib
     <select
       ref={ref}
       className={cn(
-        "flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "flex h-11 w-full rounded-xl border border-border-strong bg-white px-3 text-[15px] text-ink",
+        "focus-visible:outline-none focus-visible:border-ink focus-visible:ring-2 focus-visible:ring-accent/25",
         className
       )}
       {...props}
@@ -97,12 +108,12 @@ export function Badge({
   ...props
 }: React.HTMLAttributes<HTMLSpanElement> & { variant?: "default" | "outline" | "success" | "warn" | "error" | "muted" }) {
   const variants: Record<string, string> = {
-    default: "bg-primary/10 text-primary",
-    outline: "border border-border text-foreground",
-    success: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-    warn: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-    error: "bg-destructive/15 text-destructive",
-    muted: "bg-muted text-muted-foreground",
+    default: "bg-accent/10 text-accent",
+    outline: "border border-border-strong text-ink",
+    success: "bg-emerald-500/12 text-emerald-700",
+    warn: "bg-amber-500/14 text-amber-700",
+    error: "bg-[#d23b3b]/12 text-[#b02a2a]",
+    muted: "bg-panel text-muted",
   };
   return (
     <span
@@ -115,21 +126,21 @@ export function Badge({
 /* ---------------------------------------------------------------- Progress */
 export function Progress({ value, className }: { value: number; className?: string }) {
   return (
-    <div className={cn("h-2.5 w-full overflow-hidden rounded-full bg-secondary", className)}>
+    <div className={cn("h-2.5 w-full overflow-hidden rounded-full bg-panel-2", className)}>
       <div
-        className="h-full rounded-full bg-primary transition-all duration-300"
+        className="h-full rounded-full bg-accent transition-all duration-300"
         style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
       />
     </div>
   );
 }
 
-/* ---------------------------------------------------------- Checkbox + misc */
+/* ---------------------------------------------------------------- Checkbox */
 export function Checkbox({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       type="checkbox"
-      className={cn("h-4 w-4 rounded border-input accent-[hsl(var(--primary))]", className)}
+      className={cn("h-4 w-4 rounded border-border-strong accent-[var(--accent)]", className)}
       {...props}
     />
   );

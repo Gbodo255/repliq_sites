@@ -1,15 +1,26 @@
 import type {
+  AuthConfig,
   DashboardStats,
   ProjectDetail,
   ProjectSummary,
   ReplicationRequest,
   OutputTarget,
+  User,
 } from "@/types";
 
 const BASE = "/api";
 
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     ...init,
   });
@@ -21,12 +32,19 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(msg);
+    throw new ApiError(res.status, msg);
   }
   return res.json() as Promise<T>;
 }
 
 export const api = {
+  // Auth
+  authConfig: () => req<AuthConfig>("/auth/config"),
+  me: () => req<User>("/auth/me"),
+  devLogin: () => req<User>("/auth/dev-login", { method: "POST" }),
+  logout: () => req<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  googleLoginUrl: () => `${BASE}/auth/google/login`,
+
   dashboard: () => req<DashboardStats>("/dashboard"),
   listProjects: () => req<ProjectSummary[]>("/projects"),
   getProject: (id: string) => req<ProjectDetail>(`/projects/${id}`),

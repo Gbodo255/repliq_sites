@@ -26,6 +26,7 @@ class OutputTarget(str, Enum):
     nextjs = "nextjs"                          # Next.js (App Router)
     wordpress_theme = "wordpress_theme"        # installable WordPress theme
     wordpress_headless = "wordpress_headless"  # WordPress + Next.js front-end
+    figma = "figma"                            # editable Figma design (plugin)
 
 
 class ReplicationRequest(BaseModel):

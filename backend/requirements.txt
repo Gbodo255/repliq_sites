@@ -13,3 +13,4 @@ websockets>=12.0
 numpy>=1.26
 aiofiles>=23.0
 python-multipart>=0.0.9
+itsdangerous>=2.1

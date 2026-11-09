@@ -84,6 +84,31 @@ INTERACTIONS_JS = r"""/*
   var bpTimer = null;
   window.addEventListener("resize", function () { clearTimeout(bpTimer); bpTimer = setTimeout(applyBreakpoints, 60); });
 
+  // 0a-bis. Per-breakpoint DOM variants (frameworks like Framer re-render a
+  //    different DOM per breakpoint; each variant root carries data-rx-bpv and
+  //    its visible width range is on <body data-rx-bpv-ranges>). A stylesheet
+  //    @media fallback hides the inactive ones, but a framework can pin
+  //    display:...!important on a root with a higher-specificity selector, so
+  //    enforce the choice here with an inline !important display (which beats
+  //    every stylesheet rule). Exactly one variant shows at any width.
+  var bpvRanges = null;
+  function applyBpVariants() {
+    if (bpvRanges === null) {
+      try { bpvRanges = JSON.parse(document.body.getAttribute("data-rx-bpv-ranges") || "[]"); } catch (e) { bpvRanges = []; }
+    }
+    if (!bpvRanges.length) return;
+    var w = window.innerWidth, vis = {};
+    bpvRanges.forEach(function (r) { vis[r[0]] = (w >= r[1] && (r[2] === null || w <= r[2])); });
+    $("[data-rx-bpv]").forEach(function (el) {
+      var tag = el.getAttribute("data-rx-bpv");
+      if (!(tag in vis)) return;
+      if (vis[tag]) el.style.removeProperty("display");
+      else el.style.setProperty("display", "none", "important");
+    });
+  }
+  var bpvTimer = null;
+  window.addEventListener("resize", function () { clearTimeout(bpvTimer); bpvTimer = setTimeout(applyBpVariants, 60); });
+
   // 0b. Scroll-state classes (sticky / shrinking header, "scrolled" nav).
   //     <body data-rx-scroll='{"rows":[["html"|"body"|<path>,[cls...]]],"threshold":N}'>
   var ssTargets = null, ssThreshold = 60, ssOn = null;
@@ -265,6 +290,7 @@ INTERACTIONS_JS = r"""/*
 
   function init() {
     applyBreakpoints();
+    applyBpVariants();
     setupScrollState();
     setupReveal();
     setupCarousels();

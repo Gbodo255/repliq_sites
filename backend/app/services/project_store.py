@@ -68,7 +68,7 @@ class ProjectStore:
         self.save(detail)
 
     # ------------------------------------------------------------- lifecycle
-    def create(self, name: str, url: str, options: ReplicationOptions) -> dict:
+    def create(self, name: str, url: str, options: ReplicationOptions, user_id: str = "") -> dict:
         pid = uuid.uuid4().hex[:12]
         now = time.time()
         self.site_dir(pid).mkdir(parents=True, exist_ok=True)
@@ -77,6 +77,7 @@ class ProjectStore:
             "id": pid,
             "name": name or url,
             "url": url,
+            "user_id": user_id,
             "status": "queued",
             "created_at": now,
             "updated_at": now,
@@ -116,8 +117,13 @@ class ProjectStore:
                 pass
         return db.get(pid)
 
-    def list(self, limit: int = 100) -> list[dict]:
-        return db.list_summaries(limit)
+    def list(self, limit: int = 100, user_id: str | None = None) -> list[dict]:
+        return db.list_summaries(limit, user_id)
+
+    def owns(self, pid: str, user_id: str) -> bool:
+        """True when ``pid`` exists and belongs to ``user_id``."""
+        detail = self.get(pid)
+        return bool(detail) and detail.get("user_id", "") == user_id
 
     def delete(self, pid: str) -> bool:
         d = self.project_dir(pid)
@@ -127,8 +133,8 @@ class ProjectStore:
         db.delete(pid)
         return existed
 
-    def dashboard(self) -> dict:
-        return db.dashboard()
+    def dashboard(self, user_id: str | None = None) -> dict:
+        return db.dashboard(user_id)
 
 
 store = ProjectStore()
